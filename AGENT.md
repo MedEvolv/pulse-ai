@@ -46,6 +46,8 @@ Unified database design:
 
 - `docs/unified-database/README.md`
 - `docs/unified-database/schema.sql`
+- `docs/unified-database/seed-crosswalk.sql` (identity crosswalk seed, v0.1)
+- `docs/unified-database/crosswalk.md` (crosswalk reconciliation + scale-up path)
 - `docs/pulse-00-canonical-contract.md` (Pulse-00 — canonical revenue contract)
 
 If this file conflicts with current source code, inspect and test the source
@@ -1411,7 +1413,11 @@ Plan a separate Vite migration after:
 ### Strategic/open
 
 13. Unified Supabase database is proposed, not provisioned.
-14. Canonical clinic identity crosswalk is not built. (Track B, next deliverable.)
+14. Canonical clinic identity crosswalk — **built v0.1 at demo scope**
+    (`docs/unified-database/seed-crosswalk.sql` + `crosswalk.md`). One proven cross-product
+    identity (Kamla Nagar: Pulse `DL-KMN-01` = Clove `5129`); 17 canonical clinics, 31 actors,
+    14 regions. Scaling to the full 576-clinic Clove master (Master Tracker + KML) is a gated
+    scale-up path, not yet done.
 15. Pulse-00 canonical export contract — **finalized v0.1** at
     `docs/pulse-00-canonical-contract.md` (journey, metrics, leakage taxonomy, export
     contract, all traced to `engine.py`). Crosswalk is the remaining Track B item.
@@ -1753,7 +1759,9 @@ Delivery is not manager approval.
    - revenue/treatment fields;
    - region/clinic/owner mapping.
 10. Decide the unified database project and environment structure.
-11. Build clinic/actor/region crosswalk before shared-database claims.
+11. Build clinic/actor/region crosswalk before shared-database claims. **DONE v0.1**
+    (demo scope) — `docs/unified-database/seed-crosswalk.sql`. Scale to full 576-clinic
+    Clove master (Master Tracker + KML) is a separate gated step.
 12. Implement database adapters behind unchanged route contracts.
 13. Run one controlled export-based design-partner pilot.
 

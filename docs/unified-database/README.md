@@ -58,12 +58,17 @@ clinics** with different ids. Unification is only real once they resolve to one 
 
 - `core.clinic` = canonical clinic (UID + agreed `canonical_code`).
 - `core.clinic_alias (product, external_code) -> clinic_uid` = the crosswalk.
-- Seed the crosswalk from the **Clove Master Tracker + KML join** (576 clinics, already reconciled in
-  `reputationos/.../private-clinic-locations`) and the Pulse demo catalogue.
-- Do the same for `core.actor` (owners/agents/clinic-heads) and `core.region`
-  (Pulse's coarse bands ↔ ReputationOS's region/sub_region/zone).
+- Seed the crosswalk from the Pulse demo catalogue (`engine.py`) and the ReputationOS demo data
+  (`domain/demo-data.ts`). **v0.1 seed is built:** [`seed-crosswalk.sql`](seed-crosswalk.sql),
+  documented in [`crosswalk.md`](crosswalk.md). It covers the clinics/actors that exist in the
+  two running demos — one proven cross-product identity (Kamla Nagar: Pulse `DL-KMN-01` = Clove
+  `5129`); scaling to the full 576-clinic Clove master (Master Tracker + KML) is the documented,
+  gated scale-up path in `crosswalk.md`.
+- Done for `core.actor` (owners/agents/clinic-heads — disjoint sets, no false merges) and
+  `core.region` (Pulse's coarse bands ↔ ReputationOS's region/sub_region in one hierarchy).
 
-Until the crosswalk exists, the two products cannot truthfully claim to share data. Build it first.
+Until the crosswalk exists, the two products cannot truthfully claim to share data. It now exists
+at demo scope.
 
 ## 4. Access & safety model
 
