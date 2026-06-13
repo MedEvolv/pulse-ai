@@ -127,7 +127,7 @@ export default function LeakageDetail() {
               <div className="flex items-center gap-2">
                 <span className="text-[11px] text-muted">Status</span>
                 <StatusChip status={intervention?.status || "New"} testid="intervention-status" />
-                <span className="ml-auto text-[10px] text-muted">No external writeback</span>
+                <span className="ml-auto text-[10px] text-muted">No external system writeback</span>
               </div>
 
               <div>
