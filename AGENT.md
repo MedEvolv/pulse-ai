@@ -1,6 +1,6 @@
 # Pulse AI - Canonical Agent Handoff
 
-Last updated: 2026-06-13
+Last updated: 2026-06-14
 
 This file is the operational memory and instruction layer for every agent that
 works in this repository. Read it before planning, editing, testing, committing,
@@ -10,6 +10,28 @@ It records the product intent, technical architecture, implementation history,
 truth boundaries, known risks, verification state, competitive positioning,
 demo narrative, and next decisions. Do not replace it with a shorter generic
 README.
+
+---
+
+## Agent skills
+
+Per-repo config consumed by the engineering skills (`to-issues`, `to-prd`, `triage`,
+`diagnose`, `tdd`, `improve-codebase-architecture`, `zoom-out`).
+
+### Issue tracker
+
+Issues live as GitHub issues on `MedEvolv/pulse-ai` (via the `gh` CLI). The vault + this
+AGENT.md remain the strategic record; issues are discrete grabbable work. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`); labels created on first triage use. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context. `CONTEXT.md` + `docs/adr/` created lazily by `/grill-with-docs`; until then
+the domain glossary is `docs/pulse-00-canonical-contract.md`. See `docs/agents/domain.md`.
 
 ---
 
