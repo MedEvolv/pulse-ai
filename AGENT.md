@@ -1383,13 +1383,14 @@ Plan a separate Vite migration after:
 
 ## 24. Known Issues and Open Risks
 
-### P1
+### P1 — RESOLVED 2026-06-13 (Track A, commit `7f9f2f9`)
 
-1. Missing `backend/.env.example`.
-2. Missing `frontend/.env.example`.
-3. Navigation still says `Agent Reliability`.
-4. Backend simulation bounds are broader than the correction PRD.
-5. Untracked `.vercel/` directories exist.
+1. ~~Missing `backend/.env.example`.~~ Added.
+2. ~~Missing `frontend/.env.example`.~~ Added.
+3. ~~Navigation still says `Agent Reliability`.~~ Renamed to `Evaluation`.
+4. ~~Backend simulation bounds are broader than the correction PRD.~~ Tightened to
+   improve_pp 0..15 and avg_realized_value >0..1,000,000.
+5. ~~Untracked `.vercel/` directories exist.~~ `.vercel/` now gitignored.
 
 ### P2
 
@@ -1785,25 +1786,27 @@ NOT auto-redeploy; deploys are manual.
 Backend runtime on Vercel:
 
 - No `MONGO_URL`, `EMERGENT_LLM_KEY`, or model key is configured.
-- It therefore runs the in-memory storage fallback and deterministic briefing
-  only. Read flows (`meta`, `cockpit`, `leakages`, `journeys`, `evaluation`) and
-  the deterministic `POST /api/brief` were verified live (HTTP 200).
-- Mutable state (interventions, proof, session budgets) is NOT durable across
-  serverless cold starts in this configuration.
+- `server.py` now makes `MONGO_URL`/`DB_NAME` optional with an in-memory fallback
+  (`interventions`, `proofs`, `model_budget`, `model_cache`; `$set`/`$inc`/upsert/
+  `delete_many`). It runs deterministic-only. Read flows (`meta`, `cockpit`,
+  `opportunity`, `leakages`, `journeys`, `evaluation`, `model-budget`,
+  `interventions`) and the deterministic `POST /api/brief` are verified live (200);
+  sim bounds enforced (10pp→200, 20pp→422).
+- Mutable state (interventions, proofs, session/model budgets) is NOT durable
+  across serverless cold starts in this configuration. Set `MONGO_URL` for durable,
+  session-isolated persistence.
 
-Important divergence — the live build is BEHIND `origin/main`:
+Reproducibility (resolved 2026-06-13, Track A):
 
-- The deployed bundles were built from the pre-correction code (~`8987d3c`)
-  during that session, BEFORE Emergent's parallel CP-04..08 push (`f7b5502`) and
-  the unified-database docs commit (`b013c41`).
-- The serverless entrypoint (`backend/api/index.py`, `backend/vercel.json`) and a
-  frontend `api.js` HTML-response guard existed only in the local deploy session
-  and were intentionally dropped when reconciling with Emergent's push. They are
-  NOT in `origin/main`.
-- Consequence: the current live site is NOT cleanly reproducible from
-  `origin/main` as-is. A clean redeploy of current code requires re-adding the
-  serverless entrypoint + `vercel.json` (and optionally the api.js guard) and
-  verifying that `emergentintegrations==0.2.0` installs in the Vercel build.
+- The live site now runs the corrected v0.2 (CP-04..08) build and IS reproducible
+  from `origin/main` at `7f9f2f9`. The serverless entrypoint (`backend/api/index.py`
+  + `backend/vercel.json`), the in-memory fallback, and the `api.js` HTML-response
+  guard are committed.
+- `emergentintegrations==0.2.0` is **not on public PyPI**, so it is commented out of
+  `requirements.txt` (it made `pip/uv install` unsatisfiable on Vercel/CI/fresh
+  local). The deployed backend never imports it (model off). NOTE: if Emergent's
+  auto-commit bot regenerates `requirements.txt` and re-adds the pin, the Vercel
+  build will break again — re-comment it before redeploying.
 
 No live shared database was provisioned. This deployment is a synthetic demo.
 
