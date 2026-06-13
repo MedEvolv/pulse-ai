@@ -46,6 +46,7 @@ Unified database design:
 
 - `docs/unified-database/README.md`
 - `docs/unified-database/schema.sql`
+- `docs/pulse-00-canonical-contract.md` (Pulse-00 — canonical revenue contract)
 
 If this file conflicts with current source code, inspect and test the source
 before changing this file. If it conflicts with a newer explicit decision from
@@ -1410,8 +1411,10 @@ Plan a separate Vite migration after:
 ### Strategic/open
 
 13. Unified Supabase database is proposed, not provisioned.
-14. Canonical clinic identity crosswalk is not built.
-15. Pulse-00 canonical export contract is not yet finalized.
+14. Canonical clinic identity crosswalk is not built. (Track B, next deliverable.)
+15. Pulse-00 canonical export contract — **finalized v0.1** at
+    `docs/pulse-00-canonical-contract.md` (journey, metrics, leakage taxonomy, export
+    contract, all traced to `engine.py`). Crosswalk is the remaining Track B item.
 16. No live connectors exist.
 17. No production authentication or RBAC exists.
 18. Complete CAC-to-LTV is not implemented.
@@ -1736,11 +1739,11 @@ Delivery is not manager approval.
 
 ### Product work after competition
 
-8. Finalize Pulse-00:
-   - canonical journey;
-   - metric definitions;
-   - leakage taxonomy;
-   - export contract.
+8. Finalize Pulse-00 — **DONE v0.1** (`docs/pulse-00-canonical-contract.md`):
+   - canonical journey (4-stage funnel ending at Attended; treatment/revenue contextual);
+   - metric definitions (exact num/den, traced to `compute_metrics`);
+   - leakage taxonomy (L-01..L-08, thresholds, `shared`/`allocation`/`diagnostic` relationships);
+   - export contract (entity→`core`/`pulse` table mapping, identity/provenance/privacy rules).
 9. Obtain Vikram’s data-source reality:
    - lead exports;
    - campaign spend;
