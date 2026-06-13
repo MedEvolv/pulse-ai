@@ -21,6 +21,19 @@ client.interceptors.request.use((cfg) => {
   return cfg;
 });
 
+// Vercel SPA mode serves index.html (HTTP 200) for unknown/unreachable backend
+// paths. Detect that string body and reject so pages show an error state instead
+// of crashing while trying to read HTML as JSON.
+client.interceptors.response.use(
+  (response) => {
+    if (typeof response.data === "string") {
+      return Promise.reject(new Error("Backend not reachable"));
+    }
+    return response;
+  },
+  (error) => Promise.reject(error)
+);
+
 export const getMeta = () => client.get("/meta").then((r) => r.data);
 export const getCockpit = (region) => client.get("/cockpit", { params: { region } }).then((r) => r.data);
 export const getOpportunity = (region) => client.get("/opportunity", { params: { region } }).then((r) => r.data);

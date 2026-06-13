@@ -13,7 +13,7 @@ const NAV = [
   { to: "/leakages", label: "Leakages", icon: Droplets, testid: "nav-leakages" },
   { to: "/simulation", label: "Simulation", icon: SlidersHorizontal, testid: "nav-simulation" },
   { to: "/data-quality", label: "Data Quality", icon: Database, testid: "nav-data-quality" },
-  { to: "/evaluation", label: "Agent Reliability", icon: ShieldCheck, testid: "nav-evaluation" },
+  { to: "/evaluation", label: "Evaluation", icon: ShieldCheck, testid: "nav-evaluation" },
 ];
 
 const DebugDrawer = ({ open, onClose }) => {

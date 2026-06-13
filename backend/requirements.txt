@@ -3,4 +3,7 @@ uvicorn==0.34.0
 python-dotenv==1.0.1
 motor==3.6.0
 pydantic==2.10.4
-emergentintegrations==0.2.0
+# emergentintegrations==0.2.0  -- Emergent-platform-provided; NOT on public PyPI,
+# so pinning it here makes `pip/uv install` (Vercel, CI, fresh local) unsatisfiable.
+# The app runs deterministic-only without it; briefing.py imports it lazily and
+# falls back gracefully when absent. Install via the Emergent toolchain for model mode.

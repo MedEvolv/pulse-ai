@@ -22,10 +22,90 @@ import model_budget
 
 load_dotenv()
 
-MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME = os.environ["DB_NAME"]
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
+
+# ----------------------------------------------------------------------------
+# Storage: MongoDB when MONGO_URL is set, otherwise an in-memory fallback so the
+# app runs self-contained (e.g. Vercel serverless) on deterministic synthetic
+# data. The mutable collections are `interventions` and `proofs`; everything
+# else is computed deterministically by the engine. In-memory state is
+# per-process and NOT durable across serverless cold starts — acceptable for the
+# synthetic demo; set MONGO_URL for durable, session-isolated persistence.
+# ----------------------------------------------------------------------------
+class _MemCursor:
+    def __init__(self, docs):
+        self._docs = docs
+        self._i = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._i >= len(self._docs):
+            raise StopAsyncIteration
+        d = self._docs[self._i]
+        self._i += 1
+        return d
+
+
+class _MemCollection:
+    def __init__(self):
+        self._docs = []
+
+    @staticmethod
+    def _match(doc, query):
+        return all(doc.get(k) == v for k, v in (query or {}).items())
+
+    async def count_documents(self, query=None):
+        return sum(1 for d in self._docs if self._match(d, query))
+
+    def find(self, query=None):
+        return _MemCursor([dict(d) for d in self._docs if self._match(d, query)])
+
+    async def find_one(self, query=None):
+        for d in self._docs:
+            if self._match(d, query):
+                return dict(d)
+        return None
+
+    async def insert_one(self, doc):
+        self._docs.append(dict(doc))
+
+    async def insert_many(self, docs):
+        self._docs.extend(dict(d) for d in docs)
+
+    async def update_one(self, query, update, upsert=False):
+        for d in self._docs:
+            if self._match(d, query):
+                d.update(update.get("$set", {}))
+                for k, v in update.get("$inc", {}).items():
+                    d[k] = d.get(k, 0) + v
+                return
+        if upsert:
+            doc = dict(query or {})
+            doc.update(update.get("$set", {}))
+            for k, v in update.get("$inc", {}).items():
+                doc[k] = doc.get(k, 0) + v
+            self._docs.append(doc)
+
+    async def delete_many(self, query=None):
+        self._docs[:] = [d for d in self._docs if not self._match(d, query)]
+
+
+class _MemDB:
+    def __init__(self):
+        self.interventions = _MemCollection()
+        self.proofs = _MemCollection()
+        self.model_budget = _MemCollection()
+        self.model_cache = _MemCollection()
+
+
+MONGO_URL = os.environ.get("MONGO_URL")
+DB_NAME = os.environ.get("DB_NAME", "pulse_ai")
+if MONGO_URL:
+    client = AsyncIOMotorClient(MONGO_URL)
+    db = client[DB_NAME]
+else:
+    db = _MemDB()
 
 app = FastAPI(title="Pulse AI")
 
@@ -137,10 +217,10 @@ class BriefRequest(BaseModel):
 
 class SimRequest(BaseModel):
     region: str
-    contact_improve_pp: float = Field(default=0, ge=0, le=100)
-    booking_improve_pp: float = Field(default=0, ge=0, le=100)
-    show_improve_pp: float = Field(default=0, ge=0, le=100)
-    avg_realized_value: float = Field(default=engine.DEFAULT_AVG_REALIZED_VALUE, ge=0, le=10_000_000)
+    contact_improve_pp: float = Field(default=0, ge=0, le=15)
+    booking_improve_pp: float = Field(default=0, ge=0, le=15)
+    show_improve_pp: float = Field(default=0, ge=0, le=15)
+    avg_realized_value: float = Field(default=engine.DEFAULT_AVG_REALIZED_VALUE, gt=0, le=1_000_000)
 
     @field_validator("region")
     @classmethod
