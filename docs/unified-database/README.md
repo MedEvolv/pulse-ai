@@ -100,15 +100,23 @@ external system. Those remain gated.
 - A future `backend/db/pg.py` implements that interface against Postgres (asyncpg/SQLAlchemy). No route
   signatures change.
 
-## 7. Open decisions for bhai
+## 7. Decisions (approved 2026-06-13)
 
-1. **Host:** new dedicated Supabase project, or reuse the existing Dental Lab Supabase project with
-   separate schemas? (Recommend: **new dedicated project** — cleaner blast radius, separate billing.)
-2. **ORM for ReputationOS:** Prisma (matches Dental Lab, typed migrations) vs `supabase-js` (lighter).
-   (Recommend: **Prisma**, for one migration tool across the estate.)
-3. **Canonical clinic code:** adopt Clove/SAP codes as `canonical_code` (real, 576 clinics) and alias
-   the Pulse demo codes to them? (Recommend: **yes** — real topology wins.)
-4. **Environments:** one project with `dev`/`prod` schemas, or two projects? (Recommend: **two projects**.)
+1. **Host → new dedicated Supabase project** (not the Dental Lab project). Dental Lab is heading into
+   a friendly-lab pilot; a separate project keeps uptime, migrations, and billing isolated, and a new
+   project is free.
+2. **ReputationOS → Prisma as a typed client in introspection mode (`prisma db pull`); schema
+   migrations owned by SQL/Supabase, not Prisma Migrate.** A shared, multi-schema, two-language DB
+   needs one migration authority (this `schema.sql` / Supabase migrations). Prisma gives ReputationOS
+   a typed reader/writer without an ORM-vs-SQL migration tug-of-war; Pulse uses generated Python types.
+3. **Canonical clinic → yes.** Identity is keyed by internal `clinic_uid`; `canonical_code` = Clove/SAP
+   (real, 576 clinics); Pulse demo codes alias onto it. Raw SAP codes are an internal join key only and
+   must never be rendered on demo/external surfaces (honors the existing Clove privacy boundary).
+4. **Environments → one dedicated project now; add a separate prod project when real data arrives.**
+   All data is currently synthetic, so standing up prod now is premature and risks free-tier project
+   limits. The promotion trigger is concrete: the first real export/pilot dataset (also the DPDP /
+   data-residency trigger).
 
-Once 1–4 are answered, the next artifact is **Pulse-00** (canonical journey, metric definitions,
-leakage taxonomy, export contract) — already named as the required next step in the convergence decision.
+No agent may provision this database merely because the schema exists. The hard prerequisites stay:
+**Pulse-00** (canonical journey, metric definitions, leakage taxonomy, export contract) and the
+clinic/actor/region **identity crosswalk**, both of which can be built now without provisioning anything.
