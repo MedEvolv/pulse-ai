@@ -1,8 +1,10 @@
 """Pytest fixtures with strict test isolation (CP-09.4).
 
-- Forces a dedicated test database (never the demo DB).
+- Defaults to the in-memory adapter so the suite is self-contained (the same
+  adapter the public demo ships on). Set MONGO_URL in the environment to run the
+  fabric tests against a real Mongo; a dedicated _test DB is then enforced.
 - Disables model calls so no automated test can reach a provider.
-- Provides a FastAPI TestClient bound to the isolated DB.
+- Provides a FastAPI TestClient bound to the selected adapter.
 """
 import os
 import sys
@@ -10,7 +12,9 @@ import sys
 # Configure BEFORE importing the app. load_dotenv(override=False) will not clobber these.
 os.environ["DB_NAME"] = os.environ.get("DB_NAME_TEST", "pulse_ai_test")
 os.environ["MODEL_ENABLED"] = "false"          # no model calls in automated tests
-os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
+# NOTE: MONGO_URL is deliberately NOT defaulted. Absent -> server uses the
+# in-memory adapter (_MemDB), so tests run with no external service. To exercise
+# the Mongo path, export MONGO_URL before running pytest.
 os.environ.setdefault("CORS_ORIGINS", "*")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,9 +44,12 @@ def session_header():
 @pytest.fixture(autouse=True, scope="session")
 def _cleanup_test_db():
     yield
+    # In-memory adapter: nothing external to drop.
+    mongo_url = os.environ.get("MONGO_URL")
+    if not mongo_url:
+        return
     # Drop the isolated test DB at the end of the session.
     from pymongo import MongoClient
-    c = MongoClient(os.environ["MONGO_URL"])
     name = os.environ["DB_NAME"]
     if name.endswith("_test"):
-        c.drop_database(name)
+        MongoClient(mongo_url).drop_database(name)
