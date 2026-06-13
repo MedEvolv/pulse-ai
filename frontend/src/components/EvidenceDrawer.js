@@ -1,7 +1,13 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { X, FileText } from "lucide-react";
 
 export default function EvidenceDrawer({ open, onClose, title, evidence = [] }) {
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50" data-testid="evidence-drawer">
