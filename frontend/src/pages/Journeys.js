@@ -20,11 +20,36 @@ const Select = ({ value, onChange, options, label, testid }) => (
 export default function Journeys() {
   const { region, meta } = useFilters();
   const navigate = useNavigate();
-  const [sp] = useSearchParams();
+  const [sp, setSp] = useSearchParams();
   const [rows, setRows] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
-  const [f, setF] = useState({ clinic: "", channel: "", campaign: "", stage: "", appointment_status: "", leakage_flag: "" });
+  const initF = {
+    clinic: sp.get("clinic") || "", channel: sp.get("channel") || "",
+    campaign: sp.get("campaign") || "", stage: sp.get("stage") || "",
+    appointment_status: sp.get("appointment_status") || "",
+    leakage_flag: sp.get("leakage_flag") || "", funnel_stage: sp.get("funnel_stage") || "",
+  };
+  const [f, setF] = useState(initF);
+
+  // hydrate when URL changes (e.g. arriving from a funnel/leakage drilldown)
+  useEffect(() => {
+    setF({
+      clinic: sp.get("clinic") || "", channel: sp.get("channel") || "",
+      campaign: sp.get("campaign") || "", stage: sp.get("stage") || "",
+      appointment_status: sp.get("appointment_status") || "",
+      leakage_flag: sp.get("leakage_flag") || "", funnel_stage: sp.get("funnel_stage") || "",
+    });
+  }, [sp.toString()]);
+
+  const setFilter = (patch) => {
+    const next = { ...f, ...patch };
+    setF(next);
+    const params = {};
+    if (region) params.region = region;
+    Object.entries(next).forEach(([k, v]) => { if (v) params[k] = v; });
+    setSp(params, { replace: true });
+  };
 
   const load = useCallback(() => {
     setLoading(true); setErr(null);
@@ -37,6 +62,7 @@ export default function Journeys() {
   useEffect(() => { load(); }, [load]);
 
   const clinics = (meta?.clinics || []).filter((c) => c.region_id === region);
+  const clearAll = () => { setF({ clinic: "", channel: "", campaign: "", stage: "", appointment_status: "", leakage_flag: "", funnel_stage: "" }); setSp(region ? { region } : {}, { replace: true }); };
 
   return (
     <div className="space-y-4" data-testid="journeys-page">
@@ -47,19 +73,24 @@ export default function Journeys() {
 
       <Card>
         <div className="flex flex-wrap gap-2 p-3 border-b border-line" data-testid="journey-filters">
-          <Select value={f.clinic} onChange={(v) => setF({ ...f, clinic: v })} label="All clinics" testid="filter-clinic"
+          <Select value={f.clinic} onChange={(v) => setFilter({ clinic: v })} label="All clinics" testid="filter-clinic"
             options={clinics.map((c) => ({ v: c.clinic_code, t: `${c.clinic_code} ${c.name}` }))} />
-          <Select value={f.channel} onChange={(v) => setF({ ...f, channel: v })} label="All channels" testid="filter-channel"
+          <Select value={f.channel} onChange={(v) => setFilter({ channel: v })} label="All channels" testid="filter-channel"
             options={[{ v: "google", t: "Google" }, { v: "meta", t: "Meta" }]} />
-          <Select value={f.stage} onChange={(v) => setF({ ...f, stage: v })} label="All stages" testid="filter-stage"
+          <Select value={f.stage} onChange={(v) => setFilter({ stage: v })} label="All stages" testid="filter-stage"
             options={STAGES.map((s) => ({ v: s, t: titleCase(s) }))} />
-          <Select value={f.appointment_status} onChange={(v) => setF({ ...f, appointment_status: v })} label="Any appt status" testid="filter-appt"
+          <Select value={f.appointment_status} onChange={(v) => setFilter({ appointment_status: v })} label="Any appt status" testid="filter-appt"
             options={APPT.map((s) => ({ v: s, t: titleCase(s) }))} />
-          <Select value={f.leakage_flag} onChange={(v) => setF({ ...f, leakage_flag: v })} label="Any leakage flag" testid="filter-flag"
+          <Select value={f.leakage_flag} onChange={(v) => setFilter({ leakage_flag: v })} label="Any leakage flag" testid="filter-flag"
             options={FLAGS.map((s) => ({ v: s, t: titleCase(s) }))} />
+          {f.funnel_stage && (
+            <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full bg-accent/10 text-accent" data-testid="funnel-stage-chip">
+              Funnel drop: {titleCase(f.funnel_stage)}
+              <button onClick={() => setFilter({ funnel_stage: "" })} className="font-bold">×</button>
+            </span>
+          )}
           {Object.values(f).some(Boolean) && (
-            <button onClick={() => setF({ clinic: "", channel: "", campaign: "", stage: "", appointment_status: "", leakage_flag: "" })}
-              className="text-[11px] text-info font-semibold px-2" data-testid="clear-filters">Clear</button>
+            <button onClick={clearAll} className="text-[11px] text-info font-semibold px-2" data-testid="clear-filters">Clear</button>
           )}
           <span className="ml-auto text-[11px] text-muted self-center">{rows?.length ?? 0} leads</span>
         </div>

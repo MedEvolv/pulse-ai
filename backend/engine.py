@@ -11,6 +11,7 @@ The LLM never computes numbers. It only narrates facts produced here.
 """
 from __future__ import annotations
 
+import hashlib
 import random
 import statistics
 from datetime import datetime, timedelta, timezone
@@ -22,9 +23,11 @@ REFERENCE_DATE = datetime(2026, 6, 13, 9, 0, tzinfo=IST)
 CURRENT_START = REFERENCE_DATE - timedelta(days=30)
 PRIOR_START = REFERENCE_DATE - timedelta(days=60)
 SEED = 42
-RULE_VERSION = "rules-1.0.0"
+RULE_VERSION = "rules-2.0.0"
 DATA_VERSION = "data-1.0.0"
+PERIOD = "2026-06"
 DEFAULT_AVG_REALIZED_VALUE = 17500  # INR per attended -> treatment
+IMPACT_DIVISOR = 3800  # tunes recoverable-value -> impact score (0-100)
 
 # ----------------------------------------------------------------------------
 # Reference catalogues
@@ -319,6 +322,17 @@ def get_evidence_index() -> dict:
             "summary": f"Reputation {rp['event_type']} theme={rp['theme']} sla={rp['sla_state']}",
             "region_id": rp["region_id"], "clinic_code": rp["clinic_code"], "lead_id": None,
         }
+    # Aggregate metric-evidence records (CP-06) participate in the evidence index
+    for mev in build_metric_evidence().values():
+        idx[mev["evidence_id"]] = {
+            "evidence_id": mev["evidence_id"],
+            "source_system": "deterministic_metric_engine",
+            "source_record_id": mev["metric_id"],
+            "summary": (f"{mev['metric_id']}: {mev['numerator']}/{mev['denominator']} "
+                        f"= {mev['value']} ({mev['affected_record_count']} affected, {mev['period']})"),
+            "region_id": mev["region_id"], "clinic_code": mev["clinic_code"], "lead_id": None,
+            "evidence_type": "aggregate_metric",
+        }
     return idx
 
 
@@ -394,30 +408,41 @@ def compute_metrics(variant="current", region=None, clinic=None) -> dict:
 
 
 def funnel(variant="current", region=None) -> list:
+    """Primary funnel ends at Appointment Attended (CP-01.6).
+
+    Treatment/revenue are returned separately as partial contextual data.
+    Each stage carries a backend `stage_key` for URL-faithful drilldown (CP-08).
+    """
     m = compute_metrics(variant, region)
     stages = [
-        ("Leads Captured", m["leads"]),
-        ("Contacted", m["contacted"]),
-        ("Appointment Booked", m["booked"]),
-        ("Appointment Attended", m["attended"]),
-        ("Treatment Accepted", m["treatments"]),
-        ("Revenue Realized", len([1 for _ in range(m["treatments"])])),
+        ("Leads Captured", "captured", m["leads"]),
+        ("Contacted", "contacted", m["contacted"]),
+        ("Appointment Booked", "appointment_booked", m["booked"]),
+        ("Appointment Attended", "attended", m["attended"]),
     ]
     out = []
     prev = None
-    for i, (name, count) in enumerate(stages):
+    for i, (name, stage_key, count) in enumerate(stages):
         rate = _safe_rate(count, prev) if prev is not None else None
         drop = (prev - count) if prev is not None else 0
-        leak = False
-        if rate is not None and rate < 0.7 and i <= 4:
-            leak = True
+        leak = rate is not None and rate < 0.7
         out.append({
-            "stage": name, "count": count,
-            "conversion_rate": rate, "drop": max(drop, 0),
-            "leakage": leak,
+            "stage": name, "stage_key": stage_key, "count": count,
+            "conversion_rate": rate, "drop": max(drop, 0), "leakage": leak,
         })
         prev = count
     return out
+
+
+def funnel_context(variant="current", region=None) -> dict:
+    """Partial contextual stages (treatment/revenue) — labelled, never part of primary funnel."""
+    m = compute_metrics(variant, region)
+    return {
+        "partial": True,
+        "label": "Partial contextual data (separate billing source, not in primary funnel)",
+        "treatment_accepted": m["treatments"],
+        "revenue_realized_inr": m["revenue_inr"],
+    }
 
 
 def best_benchmark(metric_key: str) -> dict:
@@ -475,6 +500,242 @@ def recoverable_clinic(region, clinic):
     bench_show = best_benchmark("show_rate")
     expected = round(m["scheduled"] * bench_show["value"]) if bench_show["value"] else m["attended"]
     return max(0, expected - m["attended"])
+
+
+# ----------------------------------------------------------------------------
+# CP-01 Economic truth: non-overlapping stage opportunity waterfall
+# CP-06 Cohort-faithful aggregate metric evidence
+# ----------------------------------------------------------------------------
+def clamp01(x):
+    if x is None:
+        return 0.0
+    return max(0.0, min(1.0, x))
+
+
+def display_round(x):
+    """Single shared rounding function for opportunity appointment counts."""
+    return int(round(x or 0))
+
+
+def _cohort_hash(lead_ids):
+    h = hashlib.sha256("|".join(sorted(lead_ids)).encode()).hexdigest()
+    return f"sha256:{h[:32]}"
+
+
+STAGE_METRIC = {
+    "contact": "CONTACT-RATE",
+    "booking": "BOOKING-RATE",
+    "show": "SHOW-RATE",
+}
+
+
+def metric_id_for(stage, region, clinic=None):
+    suffix = f"-{clinic}" if clinic else ""
+    return f"METRIC-{STAGE_METRIC[stage]}-{region}{suffix}-{PERIOD}"
+
+
+def mev_id_for(stage, region, clinic=None):
+    suffix = f"-{clinic}" if clinic else ""
+    return f"MEV-{region}{suffix}-{stage.upper()}-{PERIOD}"
+
+
+@lru_cache(maxsize=1)
+def build_metric_evidence() -> dict:
+    """One aggregate MetricEvidence record per stage per region (CP-06)."""
+    ds = get_dataset("current")
+    out: dict[str, dict] = {}
+    for region in REGION_DEFS:
+        rid = region["region_id"]
+        leads = [l for l in ds["leads"] if l["region_id"] == rid]
+        connected = [l for l in leads if l["connected"]]
+        booked = [l for l in leads if l["booked"]]
+        lead_ids = {l["lead_id"] for l in leads}
+        appts = [a for a in ds["appointments"] if a["lead_id"] in lead_ids]
+        attended = [a for a in appts if a["status"] == "attended"]
+
+        stage_defs = [
+            ("contact", len(connected), len(leads),
+             [l["lead_id"] for l in leads if not l["connected"]]),
+            ("booking", len(booked), len(connected),
+             [l["lead_id"] for l in connected if not l["booked"]]),
+            ("show", len(attended), len(appts),
+             [a["lead_id"] for a in appts if a["status"] != "attended"]),
+        ]
+        for stage, num, den, affected in stage_defs:
+            eid = mev_id_for(stage, rid)
+            value = round(num / den, 4) if den else None
+            out[eid] = {
+                "evidence_id": eid,
+                "evidence_type": "aggregate_metric",
+                "metric_id": metric_id_for(stage, rid),
+                "region_id": rid,
+                "clinic_code": None,
+                "period": PERIOD,
+                "stage": stage,
+                "numerator": num,
+                "denominator": den,
+                "value": value,
+                "source_batch_ids": ["BATCH-CRM-2026-06", "BATCH-TEL-2026-06", "BATCH-APT-2026-06"],
+                "cohort_definition": {"region_id": rid, "created_period": PERIOD},
+                "cohort_hash": _cohort_hash([l["lead_id"] for l in leads]),
+                "affected_record_count": len(affected),
+                "sample_affected_record_ids": affected[:8],
+                "limitations": ["Synthetic data", "First-touch attribution"],
+            }
+    return out
+
+
+def benchmark_rates() -> dict:
+    bc = best_benchmark("contact_rate")
+    bb = best_benchmark("booking_rate")
+    bs = best_benchmark("show_rate")
+    return {
+        "contact": {"type": "best_comparable_region", "source_id": bc["region_id"],
+                    "source_name": bc["region"], "value": bc["value"], "period": PERIOD,
+                    "caveat": "Best comparable synthetic region for the same period."},
+        "booking": {"type": "best_comparable_region", "source_id": bb["region_id"],
+                    "source_name": bb["region"], "value": bb["value"], "period": PERIOD,
+                    "caveat": "Best comparable synthetic region for the same period."},
+        "show": {"type": "best_comparable_region", "source_id": bs["region_id"],
+                 "source_name": bs["region"], "value": bs["value"], "period": PERIOD,
+                 "caveat": "Best comparable synthetic region for the same period."},
+    }
+
+
+@lru_cache(maxsize=8)
+def region_opportunity_groups(region: str, avg_value: float = DEFAULT_AVG_REALIZED_VALUE) -> list:
+    """Non-overlapping stage opportunity groups for a region (the only additive pools)."""
+    m = compute_metrics("current", region)
+    L = m["leads"]
+    C, B, S = clamp01(m["contact_rate"]), clamp01(m["booking_rate"]), clamp01(m["show_rate"])
+    bench = benchmark_rates()
+    Cb = clamp01(bench["contact"]["value"])
+    Bb = clamp01(bench["booking"]["value"])
+    Sb = clamp01(bench["show"]["value"])
+
+    raws = {
+        "contact": L * max(0.0, Cb - C) * B * S,
+        "booking": L * Cb * max(0.0, Bb - B) * S,
+        "show": L * Cb * Bb * max(0.0, Sb - S),
+    }
+    cur = {"contact": C, "booking": B, "show": S}
+    benchv = {"contact": Cb, "booking": Bb, "show": Sb}
+    groups = []
+    for stage in ("contact", "booking", "show"):
+        raw = raws[stage]
+        if raw <= 0.01:
+            continue
+        disp = display_round(raw)
+        groups.append({
+            "opportunity_group_id": f"OPP-{region}-{stage.upper()}-{PERIOD}",
+            "region_id": region,
+            "clinic_code": None,
+            "stage": stage,
+            "period": PERIOD,
+            "current_rate": round(cur[stage], 4),
+            "benchmark_rate": round(benchv[stage], 4),
+            "raw_additional_attended": round(raw, 2),
+            "display_additional_attended": disp,
+            "value_inr": round(disp * avg_value),
+            "benchmark": {"type": bench[stage]["type"], "source_id": bench[stage]["source_id"]},
+            "metric_evidence_id": mev_id_for(stage, region),
+            "is_additive_in_summary": True,
+            "caveats": ["Shared opportunity pool",
+                        "Not additive with another alert carrying this group ID"],
+        })
+    return groups
+
+
+def opportunity_group(region, stage):
+    for g in region_opportunity_groups(region):
+        if g["stage"] == stage:
+            return g
+    return None
+
+
+@lru_cache(maxsize=8)
+def clinic_show_allocation(region: str, avg_value: float = DEFAULT_AVG_REALIZED_VALUE) -> dict:
+    """Allocate the regional SHOW opportunity across clinics (sub-pools, NON-additive).
+
+    Guarantees sum of clinic allocations never exceeds the regional show opportunity.
+    """
+    show_group = opportunity_group(region, "show")
+    if not show_group:
+        return {}
+    regional_appts = show_group["display_additional_attended"]
+    regional_value = show_group["value_inr"]
+    cb = clinic_breakdown(region)
+    weights = {c["clinic_code"]: max(0, c["recoverable_appointments"]) for c in cb}
+    total_w = sum(weights.values())
+    alloc = {}
+    if total_w <= 0:
+        return {}
+    running = 0
+    items = sorted(weights.items(), key=lambda kv: kv[1], reverse=True)
+    for i, (code, w) in enumerate(items):
+        share = w / total_w
+        appts = display_round(regional_appts * share)
+        # cap so the running total never exceeds the regional pool
+        appts = min(appts, regional_appts - running)
+        running += appts
+        alloc[code] = {
+            "opportunity_group_id": f"OPP-{region}-SHOW-{code}-{PERIOD}",
+            "region_id": region,
+            "clinic_code": code,
+            "stage": "show",
+            "period": PERIOD,
+            "share_of_regional_show": round(share, 4),
+            "display_additional_attended": appts,
+            "value_inr": round(appts * avg_value),
+            "parent_opportunity_group_id": show_group["opportunity_group_id"],
+            "is_additive_in_summary": False,
+            "metric_evidence_id": mev_id_for("show", region),
+            "caveats": ["Allocation of the regional show opportunity",
+                        "Non-additive with the regional show pool or other clinic allocations"],
+        }
+    return alloc
+
+
+def regional_opportunity_summary(region: str) -> dict:
+    """Sum only unique additive opportunity groups (the waterfall)."""
+    groups = region_opportunity_groups(region)
+    total_appts = sum(g["display_additional_attended"] for g in groups)
+    total_value = sum(g["value_inr"] for g in groups)
+    leaks = leakages_for(region)
+    return {
+        "region_id": region,
+        "period": PERIOD,
+        "unique_opportunity_pools": len(groups),
+        "related_alerts": len(leaks),
+        "estimated_attendance_opportunity": total_appts,
+        "scenario_value_inr": total_value,
+        "opportunity_groups": groups,
+        "note": ("Scenario opportunity based on explicit benchmark assumptions. "
+                 "Not a forecast or causal revenue estimate. Not additive across related alerts."),
+    }
+
+
+def _cohort_evidence_ids(region, clinic=None, predicate=None, limit=4):
+    """Evidence IDs faithful to the affected cohort (record-level), not nearby records."""
+    ds = get_dataset("current")
+    out = []
+    for l in ds["leads"]:
+        if l["region_id"] != region:
+            continue
+        if clinic and l["clinic_code"] != clinic:
+            continue
+        if predicate and not predicate(l):
+            continue
+        # prefer a real attempt/appointment record belonging to this exact lead
+        appt = next((a for a in ds["appointments"] if a["lead_id"] == l["lead_id"]), None)
+        att = next((a for a in ds["attempts"] if a["lead_id"] == l["lead_id"]), None)
+        if appt:
+            out.append(f"EV-{appt['appointment_id']}")
+        elif att:
+            out.append(f"EV-{att['attempt_id']}")
+        if len(out) >= limit:
+            break
+    return out
 
 
 # ----------------------------------------------------------------------------
@@ -552,80 +813,116 @@ def build_leakages() -> list:
         nonlocal seq
         seq += 1
         kw["leakage_id"] = f"LEAK-{seq:03d}"
+        # Alerts are never additive in the summary; the waterfall groups are.
+        kw.setdefault("is_additive_in_summary", False)
         leakages.append(kw)
+
+    def shared_fields(region, stage, owner_role, confidence):
+        """Attach the shared regional opportunity group + metric evidence (CP-01.4)."""
+        g = opportunity_group(region, stage)
+        mev = mev_id_for(stage, region)
+        return {
+            "metric_id": metric_id_for(stage, region),
+            "metric_evidence_id": mev,
+            "opportunity_group_id": g["opportunity_group_id"] if g else None,
+            "opportunity_relationship": "shared" if g else "diagnostic",
+            "recoverable_appointments": g["display_additional_attended"] if g else 0,
+            "recoverable_value_inr": g["value_inr"] if g else 0,
+            "benchmark": g["benchmark"] if g else None,
+            "owner_role": owner_role,
+            "confidence": confidence,
+        }
 
     for region in REGION_DEFS:
         rid = region["region_id"]
         rname = region["name"]
         m = compute_metrics("current", rid)
-        rec = recoverable(rid)
+        bench = benchmark_rates()
 
-        # L-01 Slow first contact
+        # L-01 Slow first contact -> CONTACT opportunity group
         if (m["median_first_contact_delay_min"] and m["median_first_contact_delay_min"] > 120) or \
            (m["leads"] and m["uncontacted_24h"] / m["leads"] > 0.20):
             dev = min(100, round((m["median_first_contact_delay_min"] or 0) / 3))
-            sev, label, bd = _severity(_impact(rec["recoverable_value_inr"]), dev, 90, 60)
+            sf = shared_fields(rid, "contact", "cluster_operations", "high")
+            sev, label, bd = _severity(_impact(sf["recoverable_value_inr"]), dev, 90, 60)
+            ev = [sf["metric_evidence_id"]] + _cohort_evidence_ids(
+                rid, predicate=lambda l: (l["first_contact_delay_min"] or 0) > 120)
             add(type="slow_first_contact", region_id=rid, region=rname, scope="region",
-                clinic_code=None, stage="Contacted", metric="median_first_contact_delay_min",
+                clinic_code=None, stage="contact", stage_label="Contacted",
+                metric="median_first_contact_delay_min",
                 observed=m["median_first_contact_delay_min"], threshold=120, unit="minutes",
                 severity_score=sev, severity=label, severity_breakdown=bd,
                 affected_records=_affected_lead_ids(rid, predicate=lambda l: (l["first_contact_delay_min"] or 0) > 120),
-                evidence_ids=_evidence_for(rid, kinds=("attempt",)),
-                recoverable_appointments=rec["recoverable_appointments"],
-                recoverable_value_inr=rec["recoverable_value_inr"],
-                owner_role="cluster_operations", confidence="high",
-                caveats=["First-touch attribution. Delay measured from CRM lead-created timestamp."])
+                affected_record_count=len(_affected_lead_ids(rid, predicate=lambda l: (l["first_contact_delay_min"] or 0) > 120, limit=10000)),
+                evidence_ids=ev,
+                caveats=["First-touch attribution", "Synthetic data", "Shared contact opportunity pool — not additive"],
+                **sf)
 
-        # L-02 Low contact rate
-        bench_c = best_benchmark("contact_rate")
+        # L-02 Low contact rate -> CONTACT opportunity group (shares with L-01)
+        bench_c = bench["contact"]
         if m["contact_rate"] and bench_c["value"] and (bench_c["value"] - m["contact_rate"]) >= 0.10 and m["leads"] >= 20:
             dev = min(100, round((bench_c["value"] - m["contact_rate"]) * 300))
-            sev, label, bd = _severity(_impact(rec["recoverable_value_inr"]), dev, 88, 50)
+            sf = shared_fields(rid, "contact", "telecalling", "high")
+            sev, label, bd = _severity(_impact(sf["recoverable_value_inr"]), dev, 88, 50)
+            ev = [sf["metric_evidence_id"]] + _cohort_evidence_ids(rid, predicate=lambda l: not l["connected"])
             add(type="low_contact_rate", region_id=rid, region=rname, scope="region",
-                clinic_code=None, stage="Contacted", metric="contact_rate",
+                clinic_code=None, stage="contact", stage_label="Contacted", metric="contact_rate",
                 observed=m["contact_rate"], threshold=round(bench_c["value"] - 0.10, 4), unit="rate",
                 severity_score=sev, severity=label, severity_breakdown=bd,
                 affected_records=_affected_lead_ids(rid, predicate=lambda l: not l["connected"]),
-                evidence_ids=_evidence_for(rid, kinds=("attempt",)),
-                recoverable_appointments=rec["recoverable_appointments"],
-                recoverable_value_inr=rec["recoverable_value_inr"],
-                owner_role="telecalling", confidence="high",
-                caveats=[f"Benchmark = best region ({bench_c['region']}) contact rate."])
+                affected_record_count=len(_affected_lead_ids(rid, predicate=lambda l: not l["connected"], limit=10000)),
+                evidence_ids=ev,
+                caveats=[f"Benchmark = best region ({bench_c['source_name']}) contact rate",
+                         "Shared contact opportunity pool — not additive"],
+                **sf)
 
-        # L-03 Contact-to-booking drop
-        bench_b = best_benchmark("booking_rate")
+        # L-03 Contact-to-booking drop -> BOOKING opportunity group
+        bench_b = bench["booking"]
         contact_breached = m["contact_rate"] and bench_c["value"] and (bench_c["value"] - m["contact_rate"]) >= 0.10
         if m["booking_rate"] and bench_b["value"] and (bench_b["value"] - m["booking_rate"]) >= 0.12 and not contact_breached:
             dev = min(100, round((bench_b["value"] - m["booking_rate"]) * 250))
-            sev, label, bd = _severity(_impact(rec["recoverable_value_inr"]), dev, 85, 45)
+            sf = shared_fields(rid, "booking", "cluster_operations", "medium")
+            sev, label, bd = _severity(_impact(sf["recoverable_value_inr"]), dev, 85, 45)
+            ev = [sf["metric_evidence_id"]] + _cohort_evidence_ids(rid, predicate=lambda l: l["connected"] and not l["booked"])
             add(type="contact_to_booking_drop", region_id=rid, region=rname, scope="region",
-                clinic_code=None, stage="Appointment Booked", metric="booking_rate",
+                clinic_code=None, stage="booking", stage_label="Appointment Booked", metric="booking_rate",
                 observed=m["booking_rate"], threshold=round(bench_b["value"] - 0.12, 4), unit="rate",
                 severity_score=sev, severity=label, severity_breakdown=bd,
                 affected_records=_affected_lead_ids(rid, predicate=lambda l: l["connected"] and not l["booked"]),
-                evidence_ids=_evidence_for(rid, kinds=("attempt",)),
-                recoverable_appointments=rec["recoverable_appointments"],
-                recoverable_value_inr=rec["recoverable_value_inr"],
-                owner_role="cluster_operations", confidence="medium",
-                caveats=[f"Benchmark = best region ({bench_b['region']}) booking rate."])
+                affected_record_count=len(_affected_lead_ids(rid, predicate=lambda l: l["connected"] and not l["booked"], limit=10000)),
+                evidence_ids=ev,
+                caveats=[f"Benchmark = best region ({bench_b['source_name']}) booking rate",
+                         "Shared booking opportunity pool — not additive"],
+                **sf)
 
-        # L-04 High no-show (clinic level)
+        # L-04 High no-show (clinic) -> SHOW allocation sub-pool (non-additive)
+        alloc = clinic_show_allocation(rid)
         for c in clinic_breakdown(rid):
             if c["show_rate"] is not None and c["show_rate"] < 0.65 and c["scheduled"] >= 15:
                 dev = min(100, round((0.65 - c["show_rate"]) * 250))
-                sev, label, bd = _severity(_impact(round(c["recoverable_appointments"] * DEFAULT_AVG_REALIZED_VALUE)), dev, 90, 65)
+                a = alloc.get(c["clinic_code"], {})
+                appts = a.get("display_additional_attended", 0)
+                value = a.get("value_inr", 0)
+                sev, label, bd = _severity(_impact(value), dev, 90, 65)
+                ev = [mev_id_for("show", rid)] + _cohort_evidence_ids(
+                    rid, c["clinic_code"], predicate=lambda l: l["appointment_status"] == "no_show")
                 add(type="high_no_show_rate", region_id=rid, region=rname, scope="clinic",
-                    clinic_code=c["clinic_code"], stage="Appointment Attended", metric="show_rate",
+                    clinic_code=c["clinic_code"], stage="show", stage_label="Appointment Attended", metric="show_rate",
                     observed=c["show_rate"], threshold=0.65, unit="rate",
                     severity_score=sev, severity=label, severity_breakdown=bd,
                     affected_records=_affected_lead_ids(rid, c["clinic_code"], predicate=lambda l: l["appointment_status"] == "no_show"),
-                    evidence_ids=_evidence_for(rid, c["clinic_code"], kinds=("appt",)),
-                    recoverable_appointments=c["recoverable_appointments"],
-                    recoverable_value_inr=round(c["recoverable_appointments"] * DEFAULT_AVG_REALIZED_VALUE),
+                    affected_record_count=c["no_show"],
+                    evidence_ids=ev,
+                    metric_id=metric_id_for("show", rid), metric_evidence_id=mev_id_for("show", rid),
+                    opportunity_group_id=a.get("opportunity_group_id"),
+                    opportunity_relationship="allocation",
+                    recoverable_appointments=appts, recoverable_value_inr=value,
+                    benchmark={"type": bench["show"]["type"], "source_id": bench["show"]["source_id"]},
                     owner_role="cluster_operations", confidence="high",
-                    caveats=["Cancelled appointments excluded from no-show but shown separately."])
+                    caveats=["Allocation of regional show opportunity — non-additive",
+                             "Cancelled appointments excluded from no-show"])
 
-        # L-05 High cost per attended
+        # L-05 High cost per attended -> DIAGNOSTIC ONLY (no recovery pool)
         others = [compute_metrics("current", r["region_id"])["cost_per_attended_inr"]
                   for r in REGION_DEFS if r["region_id"] != rid]
         others = [o for o in others if o]
@@ -633,19 +930,26 @@ def build_leakages() -> list:
             med = statistics.median(others)
             if m["cost_per_attended_inr"] > 1.35 * med:
                 dev = min(100, round((m["cost_per_attended_inr"] / med - 1) * 80))
-                sev, label, bd = _severity(_impact(rec["recoverable_value_inr"]), dev, 92, 55)
+                excess_cost = round((m["cost_per_attended_inr"] - med) * m["attended"])
+                sev, label, bd = _severity(min(100, round(excess_cost / 3000)), dev, 92, 55)
                 add(type="high_cost_per_attended", region_id=rid, region=rname, scope="region",
-                    clinic_code=None, stage="Appointment Attended", metric="cost_per_attended_inr",
+                    clinic_code=None, stage="attended", stage_label="Appointment Attended",
+                    metric="cost_per_attended_inr",
                     observed=m["cost_per_attended_inr"], threshold=round(1.35 * med), unit="inr",
                     severity_score=sev, severity=label, severity_breakdown=bd,
-                    affected_records=_affected_lead_ids(rid, predicate=lambda l: l["appointment_status"] in ("no_show", None)),
-                    evidence_ids=_evidence_for(rid, kinds=("campaign", "appt")),
-                    recoverable_appointments=rec["recoverable_appointments"],
-                    recoverable_value_inr=rec["recoverable_value_inr"],
+                    affected_records=[],
+                    affected_record_count=m["attended"],
+                    evidence_ids=[f"EV-{c['campaign_id']}" for c in CAMPAIGNS if c["region_id"] == rid],
+                    metric_id=f"METRIC-CPA-{rid}-{PERIOD}", metric_evidence_id=None,
+                    opportunity_group_id=None, opportunity_relationship="diagnostic",
+                    recoverable_appointments=0, recoverable_value_inr=0,
+                    excess_cost_inr=excess_cost,
+                    benchmark={"type": "comparable_region_median", "source_id": None},
                     owner_role="regional_head", confidence="high",
-                    caveats=["First-touch campaign attribution. Comparable-region median used."])
+                    caveats=["Diagnostic, not additive — creates no recoverable pool",
+                             "First-touch campaign attribution", "Comparable-region median used"])
 
-        # L-06 Clinic concentration
+        # L-06 Clinic concentration -> references the SAME clinic show allocation group as no-show
         cb = clinic_breakdown(rid)
         total_rec = sum(c["recoverable_appointments"] for c in cb)
         if total_rec:
@@ -653,20 +957,28 @@ def build_leakages() -> list:
                 share = c["recoverable_appointments"] / total_rec
                 if share > 0.35 and c["recoverable_appointments"] >= 4:
                     dev = min(100, round(share * 120))
-                    sev, label, bd = _severity(_impact(round(c["recoverable_appointments"] * DEFAULT_AVG_REALIZED_VALUE)), dev, 80, 55)
+                    a = alloc.get(c["clinic_code"], {})
+                    value = a.get("value_inr", 0)
+                    appts = a.get("display_additional_attended", 0)
+                    sev, label, bd = _severity(_impact(value), dev, 80, 55)
                     add(type="clinic_concentration", region_id=rid, region=rname, scope="clinic",
-                        clinic_code=c["clinic_code"], stage="Appointment Attended", metric="recoverable_share",
+                        clinic_code=c["clinic_code"], stage="show", stage_label="Appointment Attended",
+                        metric="recoverable_share",
                         observed=round(share, 4), threshold=0.35, unit="rate",
                         severity_score=sev, severity=label, severity_breakdown=bd,
                         affected_records=_affected_lead_ids(rid, c["clinic_code"]),
-                        evidence_ids=_evidence_for(rid, c["clinic_code"], kinds=("appt",)),
-                        recoverable_appointments=c["recoverable_appointments"],
-                        recoverable_value_inr=round(c["recoverable_appointments"] * DEFAULT_AVG_REALIZED_VALUE),
+                        affected_record_count=c["scheduled"],
+                        evidence_ids=[mev_id_for("show", rid)] + _cohort_evidence_ids(rid, c["clinic_code"]),
+                        metric_id=metric_id_for("show", rid), metric_evidence_id=mev_id_for("show", rid),
+                        opportunity_group_id=a.get("opportunity_group_id"),
+                        opportunity_relationship="allocation",
+                        recoverable_appointments=appts, recoverable_value_inr=value,
+                        benchmark={"type": bench["show"]["type"], "source_id": bench["show"]["source_id"]},
                         owner_role="regional_head", confidence="medium",
-                        caveats=["Concentration measured on estimated recoverable appointments."])
+                        caveats=["Shares the clinic show pool with the no-show alert — non-additive"])
                     break
 
-        # L-08 Reputation context (contextual only)
+        # L-08 Reputation context -> diagnostic/contextual only
         ds = get_dataset("current")
         rep_breached = {}
         for rp in ds["reputations"]:
@@ -676,14 +988,18 @@ def build_leakages() -> list:
             if cnt >= 3:
                 sev, label, bd = _severity(35, 40, 60, 30)
                 add(type="repeat_complaint_context", region_id=rid, region=rname, scope="clinic",
-                    clinic_code=code, stage="Appointment Attended", metric="breached_sla_count",
+                    clinic_code=code, stage="attended", stage_label="Appointment Attended",
+                    metric="breached_sla_count",
                     observed=cnt, threshold=3, unit="count",
                     severity_score=sev, severity=label, severity_breakdown=bd,
-                    affected_records=[],
+                    affected_records=[], affected_record_count=cnt,
                     evidence_ids=_evidence_for(rid, code, kinds=("rep",)),
+                    metric_id=None, metric_evidence_id=None,
+                    opportunity_group_id=None, opportunity_relationship="diagnostic",
                     recoverable_appointments=0, recoverable_value_inr=0,
+                    benchmark=None,
                     owner_role="cluster_operations", confidence="low",
-                    caveats=["Contextual signal only. NOT presented as the proven cause of acquisition leakage."])
+                    caveats=["Contextual signal only — NOT the proven cause of acquisition leakage"])
                 break
 
     leakages.sort(key=lambda x: x["severity_score"], reverse=True)
@@ -695,3 +1011,4 @@ def leakages_for(region=None):
     if region:
         out = [l for l in out if l["region_id"] == region]
     return out
+

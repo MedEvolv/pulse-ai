@@ -2,9 +2,10 @@ import React, { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, GitBranch, Droplets, SlidersHorizontal,
-  Database, ShieldCheck, Activity, Bug, X, ChevronDown,
+  Database, ShieldCheck, Activity, Bug, X, ChevronDown, RotateCcw,
 } from "lucide-react";
 import { useFilters } from "../context/FilterContext";
+import { resetSession, SESSION_ID } from "../lib/api";
 
 const NAV = [
   { to: "/cockpit", label: "Cockpit", icon: LayoutDashboard, testid: "nav-cockpit" },
@@ -17,11 +18,18 @@ const NAV = [
 
 const DebugDrawer = ({ open, onClose }) => {
   const { meta } = useFilters();
+  const [resetting, setResetting] = useState(false);
+  const [done, setDone] = useState(false);
   if (!open) return null;
+  const doReset = async () => {
+    setResetting(true);
+    try { await resetSession(); setDone(true); setTimeout(() => window.location.reload(), 600); }
+    finally { setResetting(false); }
+  };
   return (
     <div className="fixed inset-0 z-50" data-testid="debug-drawer">
       <div className="absolute inset-0 bg-ink/30" onClick={onClose} />
-      <div className="absolute right-0 top-0 h-full w-[300px] bg-surface shadow-drawer slide-in p-4">
+      <div className="absolute right-0 top-0 h-full w-[300px] bg-surface shadow-drawer slide-in p-4 overflow-y-auto scroll-area">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-[13px] font-semibold">Developer Drawer</h3>
           <button onClick={onClose} data-testid="debug-close"><X size={16} /></button>
@@ -31,6 +39,7 @@ const DebugDrawer = ({ open, onClose }) => {
             ["Data version", meta?.data_version],
             ["Rule version", meta?.rule_version],
             ["Prompt version", meta?.prompt_version],
+            ["Period", meta?.period],
             ["Reference date", meta?.reference_date],
             ["Date range", meta?.date_range?.label],
           ].map(([k, v]) => (
@@ -39,10 +48,20 @@ const DebugDrawer = ({ open, onClose }) => {
               <dd className="font-mono text-ink">{v || "—"}</dd>
             </div>
           ))}
-          <div className="pt-2 text-[11px] text-muted">
-            Model: <span className="text-ink font-medium">Claude Sonnet 4.6</span> with deterministic fallback.
+          <div className="pt-1 text-[11px] text-muted">
+            Model: <span className="text-ink font-medium">Claude Sonnet 4.6</span>, deterministic default + validated fallback.
+          </div>
+          <div className="pt-1 text-[10px] text-muted break-all">
+            Demo session: <span className="font-mono text-ink">{SESSION_ID}</span>
           </div>
         </dl>
+        <div className="mt-4 pt-3 border-t border-line">
+          <p className="text-[11px] text-muted mb-2">Your changes are isolated to your browser session.</p>
+          <button onClick={doReset} disabled={resetting} data-testid="reset-demo-btn"
+            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-semibold bg-surface text-breach border border-breach/30 hover:bg-breach/5 disabled:opacity-50">
+            <RotateCcw size={13} /> {done ? "Reset! reloading…" : resetting ? "Resetting…" : "Reset my demo"}
+          </button>
+        </div>
       </div>
     </div>
   );

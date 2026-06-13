@@ -8,8 +8,15 @@ import Funnel from "../components/Funnel";
 import BriefPanel from "../components/BriefPanel";
 import { Card, CardHeader, SeverityChip, StatusChip, Avatar, Spinner, ErrorState } from "../components/ui";
 
+const REL_BADGE = {
+  shared: { t: "shared pool", cls: "bg-info/10 text-info" },
+  allocation: { t: "allocation", cls: "bg-accent/10 text-accent" },
+  diagnostic: { t: "diagnostic", cls: "bg-muted/15 text-muted" },
+};
+
 const TopLeakageCard = ({ l, owners, onClick }) => {
   const owner = owners.find((o) => o.owner_id === l.owner_id);
+  const rel = REL_BADGE[l.opportunity_relationship] || REL_BADGE.diagnostic;
   return (
     <button
       onClick={onClick}
@@ -19,14 +26,18 @@ const TopLeakageCard = ({ l, owners, onClick }) => {
       <div className="flex items-start justify-between gap-2">
         <div>
           <p className="text-[12.5px] font-semibold text-ink">{titleCase(l.type)}</p>
-          <p className="text-[11px] text-muted">{l.region}{l.clinic_code ? ` · ${l.clinic_code}` : ""} · {l.stage}</p>
+          <p className="text-[11px] text-muted">{l.region}{l.clinic_code ? ` · ${l.clinic_code}` : ""} · {l.stage_label || l.stage}</p>
         </div>
         <SeverityChip level={l.severity} score={l.severity_score} />
       </div>
       <div className="grid grid-cols-3 gap-2 mt-2.5 text-[11px]">
-        <div><span className="text-muted block">Affected</span><span className="font-semibold tabular">{num(l.affected_records?.length || 0)}</span></div>
+        <div><span className="text-muted block">Affected</span><span className="font-semibold tabular">{num(l.affected_record_count ?? l.affected_records?.length ?? 0)}</span></div>
         <div><span className="text-muted block">Recoverable</span><span className="font-semibold tabular">{num(l.recoverable_appointments)} appts</span></div>
         <div><span className="text-muted block">Est. value</span><span className="font-semibold tabular">{inr(l.recoverable_value_inr)}</span></div>
+      </div>
+      <div className="flex items-center gap-1.5 mt-2">
+        <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded ${rel.cls}`} data-testid={`rel-${l.leakage_id}`}>{rel.t}</span>
+        <span className="text-[9px] text-muted">not additive across alerts</span>
       </div>
       <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-line">
         <div className="flex items-center gap-1.5">
@@ -88,11 +99,47 @@ export default function Cockpit() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
-          <CardHeader title="Revenue Journey Funnel" subtitle="Lead capture → revenue · click a stage to inspect leads" testid="funnel-header" />
+          <CardHeader title="Revenue Journey Funnel" subtitle="Lead capture → attended · click a stage to inspect the dropped cohort" testid="funnel-header" />
           <Funnel funnel={data.funnel} region={region} />
+          {data.funnel_context && (
+            <div className="px-4 pb-3 -mt-1" data-testid="funnel-context">
+              <div className="text-[10.5px] text-muted bg-canvas border border-line rounded p-2">
+                {data.funnel_context.label}: Treatment accepted {num(data.funnel_context.treatment_accepted)} · Revenue {inr(data.funnel_context.revenue_realized_inr)}
+              </div>
+            </div>
+          )}
         </Card>
         <BriefPanel region={region} questions={meta?.supported_questions || []} regionName={data.region_name} />
       </div>
+
+      {/* Opportunity waterfall (CP-01 economic truth) */}
+      {data.opportunity_summary && (
+        <Card>
+          <CardHeader
+            title="Recovery Opportunity (non-overlapping)"
+            subtitle={`${data.opportunity_summary.unique_opportunity_pools} unique stage pools · ${data.opportunity_summary.related_alerts} related alerts · only unique pools are additive`}
+            testid="opportunity-header"
+          />
+          <div className="p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5" data-testid="opportunity-summary">
+              {data.opportunity_summary.opportunity_groups.map((g) => (
+                <div key={g.opportunity_group_id} className="border border-line rounded-card p-3" data-testid={`opp-${g.stage}`}>
+                  <span className="text-[11px] text-muted block capitalize">{g.stage} stage</span>
+                  <span className="text-[18px] font-bold tabular">{num(g.display_additional_attended)} <span className="text-[11px] font-normal text-muted">appts</span></span>
+                  <span className="text-[11px] text-healthy block tabular">{inr(g.value_inr)}</span>
+                  <span className="text-[9px] text-muted block mt-1 tabular">{pct(g.current_rate)} → {pct(g.benchmark_rate)} benchmark</span>
+                </div>
+              ))}
+              <div className="border-2 border-accent/40 rounded-card p-3 bg-accent/5" data-testid="opp-total">
+                <span className="text-[11px] text-muted block">Total unique opportunity</span>
+                <span className="text-[18px] font-bold tabular text-ink">{num(data.opportunity_summary.estimated_attendance_opportunity)} <span className="text-[11px] font-normal text-muted">appts</span></span>
+                <span className="text-[12px] text-healthy font-semibold block tabular">{inr(data.opportunity_summary.scenario_value_inr)}</span>
+              </div>
+            </div>
+            <p className="text-[10.5px] text-muted italic mt-2">{data.opportunity_summary.note}</p>
+          </div>
+        </Card>
+      )}
 
       {/* Top leakage */}
       <Card>

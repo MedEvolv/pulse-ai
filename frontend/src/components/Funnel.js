@@ -29,7 +29,7 @@ export default function Funnel({ funnel, region }) {
             </div>
             <span className="tip-wrap" style={{ width: "100%" }}>
               <button
-                onClick={() => navigate(`/journeys?region=${region}`)}
+                onClick={() => navigate(`/journeys?region=${region}&funnel_stage=${s.stage_key}`)}
                 data-testid={`funnel-stage-${i}`}
                 className="block w-full text-left"
                 aria-label={`${s.stage}: ${s.count} records`}

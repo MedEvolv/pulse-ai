@@ -1,0 +1,37 @@
+{
+  "summary": "Pulse AI v0.2 correction-pack regression: full backend (24/24 pytest) and frontend (Playwright) coverage. All five corrections verified — non-overlapping economics, evidence-bound brief validation, honest offline evaluation, deterministic-default + budgeted AI synthesis, and proof-based intervention closure. Cockpit, leakages, journeys URL drilldown, debug-drawer reset, evaluation page, mobile bottom-nav and input validation (bad region -> 422) all pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Evidence Drawer", "issues": ["Pressing Escape leaves the drawer's full-page bg-ink/30 backdrop in the DOM (under .brief-panel), which can intercept clicks on the funnel buttons until an explicit close button is clicked. Functional via the close button; only impacts Esc-based dismissal."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_pulse_api.py",
+    "/app/test_reports/pytest/pulse_api.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: ensure EvidenceDrawer also closes on Escape (currently the backdrop remains in DOM until the explicit close button is used)."
+  ],
+  "critical_code_review_comments": [
+    "engine.py opportunity model is internally consistent: waterfall telescopes to the benchmark delta, unique pools are the only additive groups, clinic allocation never exceeds regional show pool, and high_cost_per_attended is correctly flagged 'diagnostic' with zero pool.",
+    "brief_validation.py: comprehensive provenance/schema/numeric/privacy/confidence rejection paths; tests exercise each failure mode.",
+    "server.py: /api/brief default is deterministic; use_model=true and MODEL_DISABLED falls back gracefully; budget endpoint accurate; daily limit/cooldown/cache scaffold present.",
+    "Interventions state machine enforces no-direct-Closed (transition buttons stop at Proof Required; closure requires /proof claim + /verify approve); session-scoped overrides leave seed unaffected for other sessions.",
+    "Frontend uses REACT_APP_BACKEND_URL throughout; X-Demo-Session-ID header is automatically attached.",
+    "All required data-testids present (opportunity-summary, opp-total, rel-*, brief-mode, brief-reason, metric-chip-*, evidence-chip-*, run-ai-synthesis-btn, suggested-question, brief-ask-btn, funnel-stage-chip, debug-open, reset-demo-btn, owner-select, assign-intervention-btn, transition-*, proof-form, proof-days-input, claim-closure-btn, verify-block, verify-approve-btn, eval-disclaimer, release-ready, relationship-banner)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (24/24)", "frontend": "100% of listed flows"},
+  "test_credentials": "N/A — anonymous demo session via X-Demo-Session-ID header (browser localStorage UUID).",
+  "seed_data_creation": "Frontend playwright run mutated session 'pw-proof-001' to drive LEAK-005 (INT-0003) through Detected -> Assigned -> In Progress -> Proof Required -> Closure Claimed -> Closed. Session 'pw-fresh-1234' consumed 1 AI synthesis budget (24/25 remaining). Default/anonymous session is unaffected by these per-session overrides.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend test file at /app/backend/tests/test_pulse_api.py is exhaustive and passes against the live engine with MODEL_ENABLED=false (forced in conftest). For frontend, use a fresh X-Demo-Session-ID (set localStorage 'pulse_demo_session' via add_init_script) before running the proof-closure flow to avoid colliding with seed mutations from previous runs. AI synthesis returns either 'AI synthesis · Claude' or 'Deterministic fallback' with a brief-reason chip (both are PASS per PRD). Don't spam Run AI synthesis — 20s cooldown applies per session.",
+  "rca of the issue": "No critical issues. The minor evidence-drawer Escape behavior is cosmetic — the explicit close button works and overlays don't appear during normal user flow (only when automated tests rely on Escape)."
+}

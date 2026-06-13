@@ -48,12 +48,15 @@ export const SeverityChip = ({ level, score, testid }) => (
 );
 
 const STATUS_STYLES = {
+  Detected: "bg-muted/10 text-muted",
   New: "bg-muted/10 text-muted",
   Reviewed: "bg-info/10 text-info",
   Assigned: "bg-accent/10 text-accent",
   "In Progress": "bg-info/15 text-info",
   "Proof Required": "bg-watch/15 text-watch",
+  "Closure Claimed": "bg-accent/15 text-accent",
   Closed: "bg-healthy/10 text-healthy",
+  Reopened: "bg-watch/10 text-watch",
   Rejected: "bg-breach/10 text-breach",
   Ready: "bg-healthy/10 text-healthy",
   Partial: "bg-watch/15 text-watch",

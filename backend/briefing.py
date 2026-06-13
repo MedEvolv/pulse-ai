@@ -1,11 +1,12 @@
-"""Regional Leakage Briefing Agent.
+"""Regional Leakage Briefing Agent (CP-02 + CP-04 compliant).
 
-The model NEVER computes numbers. It receives deterministic facts and returns a
-schema-valid, evidence-grounded brief. A deterministic template fallback always
-works without a model key.
+Deterministic brief is the default. Model synthesis is explicit and validated
+with strict Pydantic + provenance + privacy + numeric + confidence checks.
+The model never computes numbers; numeric prose is rejected.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -14,10 +15,11 @@ from typing import Optional
 from dotenv import load_dotenv
 
 import engine
+from brief_validation import validate_brief_output
 
 load_dotenv()
 
-PROMPT_VERSION = "brief-1.0.0"
+PROMPT_VERSION = "brief-2.0.0"
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
 
 SUPPORTED_QUESTIONS = [
@@ -33,61 +35,49 @@ INSUFFICIENT_MSG = (
     "and scenario questions. The requested analysis is outside the available evidence."
 )
 
+CONFIDENCE_RANK = {"unverified": 0, "low": 1, "medium": 2, "high": 3}
+
 SYSTEM_MESSAGE = """You are the Regional Leakage Briefing Agent for Pulse AI, a healthcare Revenue Operations tool.
 You convert deterministic metrics, leakage objects and evidence references into a concise, role-specific operating brief.
 
 STRICT RULES:
-- Cite ONLY evidence IDs that appear in the supplied evidence set. Never invent evidence IDs.
-- Never recalculate or invent any metric or number. Use only the numbers given in the facts.
+- Cite ONLY metric IDs and evidence IDs that appear in the supplied allowlists. Never invent IDs.
+- Every finding MUST cite at least one metric ID and one evidence ID (unless insufficient_evidence is true).
+- NEVER write any number, digit, percentage or currency amount in prose (headline, summary, finding, why_it_matters, intervention title). Describe direction qualitatively (e.g. "well below benchmark"). The UI renders numbers deterministically.
 - Never invent causal claims. Distinguish correlation, operational diagnosis and proven cause.
 - Never include patient identifiers (names, phones, emails, clinical notes).
-- Never recommend autonomous external action (calls, messages, emails, budget changes). Every intervention requires human approval.
-- State missing evidence in caveats. Maximum 3 findings, maximum 3 interventions. Each intervention has exactly one owner_role.
-- Use concise executive language.
-- Be terse: summary at most 2 sentences; each "finding" and "why_it_matters" at most one sentence (~25 words). Output compact JSON only.
+- Never recommend autonomous external action. Every intervention has human_approval_required = true.
+- Do not raise confidence above the deterministic confidence ceiling provided in the facts.
+- Maximum 3 findings, maximum 3 interventions, one owner_role per intervention.
+- Use concise executive language. Be terse.
 
-Respond with ONLY a valid JSON object, no markdown, matching exactly this schema:
+Respond with ONLY a valid JSON object, no markdown, matching exactly this schema (no extra keys):
 {
-  "brief_id": "string",
   "headline": "string",
   "summary": "string",
-  "top_findings": [{"finding": "string", "why_it_matters": "string", "metric_ids": ["string"], "evidence_ids": ["string"], "confidence": "high|medium|low"}],
-  "recommended_interventions": [{"title": "string", "owner_role": "string", "priority": "high|medium|low", "evidence_ids": ["string"], "human_approval_required": true}],
-  "caveats": ["string"],
-  "insufficient_evidence": false
+  "top_findings": [{"finding": "string", "why_it_matters": "string", "metric_ids": ["string"], "evidence_ids": ["string"], "confidence": "high|medium|low|unverified"}],
+  "recommended_interventions": [{"title": "string", "owner_role": "regional_head|cluster_operations|telecalling|marketing|finance|customer_success", "priority": "high|medium|low", "evidence_ids": ["string"], "human_approval_required": true}],
+  "insufficient_evidence": false,
+  "limitations": ["string"]
 }"""
 
 
-def build_facts(region: str, question: str = "", role: str = "regional_head") -> dict:
-    metrics = engine.compute_metrics("current", region)
-    prior = engine.compute_metrics("prior", region)
-    leaks = engine.leakages_for(region)
-    rec = engine.recoverable(region)
-    dq = data_quality_summary(region)
+def is_supported_question(q: str) -> bool:
+    q = (q or "").strip()
+    if not q or q in SUPPORTED_QUESTIONS:
+        return True
+    keywords = ["region", "clinic", "spend", "show", "leak", "owner", "week",
+                "underperform", "no-show", "contact", "booking", "appointment", "cost"]
+    return any(k in q.lower() for k in keywords)
 
-    evidence_ids = sorted({e for l in leaks for e in l["evidence_ids"]})
-    evidence = [engine.get_evidence_index()[e] for e in evidence_ids if e in engine.get_evidence_index()]
-    metric_ids = [
-        f"METRIC-CONTACT-{region}", f"METRIC-SHOW-{region}",
-        f"METRIC-BOOKING-{region}", f"METRIC-CPA-{region}",
-        f"METRIC-SLA-{region}",
-    ]
-    return {
-        "region": {"region_id": region, "name": engine.REGION_NAME.get(region)},
-        "date_range": {"start": engine.CURRENT_START.date().isoformat(), "end": engine.REFERENCE_DATE.date().isoformat()},
-        "metrics": metrics,
-        "prior_metrics": prior,
-        "metric_ids": metric_ids,
-        "leakages": [{k: l[k] for k in ("leakage_id", "type", "severity", "severity_score",
-                                        "metric", "observed", "threshold", "clinic_code",
-                                        "recoverable_appointments", "recoverable_value_inr",
-                                        "owner_role", "evidence_ids", "confidence")} for l in leaks],
-        "recoverable": rec,
-        "evidence": evidence,
-        "data_quality": dq,
-        "requested_question": question,
-        "role": role,
-    }
+
+def bounded_brief() -> dict:
+    return {"insufficient_evidence": True, "bounded": True,
+            "headline": "Unsupported question",
+            "summary": INSUFFICIENT_MSG,
+            "top_findings": [], "recommended_interventions": [],
+            "limitations": [], "mode": "bounded",
+            "fallback_reason_code": "UNSUPPORTED_QUESTION", "evidence_pool": []}
 
 
 def data_quality_summary(region: Optional[str] = None) -> dict:
@@ -113,7 +103,76 @@ def data_quality_summary(region: Optional[str] = None) -> dict:
     return {"sources": sources, "identity_match_rate": identity_match_rate, "briefing_ready": ready}
 
 
-def _deterministic_brief(facts: dict) -> dict:
+def deterministic_confidence_ceiling(leaks) -> str:
+    best = "low"
+    for l in leaks:
+        if CONFIDENCE_RANK.get(l["confidence"], 0) > CONFIDENCE_RANK.get(best, 0):
+            best = l["confidence"]
+    return best
+
+
+def build_facts(region: str, question: str = "", role: str = "regional_head") -> dict:
+    metrics = engine.compute_metrics("current", region)
+    prior = engine.compute_metrics("prior", region)
+    leaks = engine.leakages_for(region)
+    summary = engine.regional_opportunity_summary(region)
+    dq = data_quality_summary(region)
+    idx = engine.get_evidence_index()
+
+    evidence_ids = sorted({e for l in leaks for e in l["evidence_ids"]})
+    evidence = [idx[e] for e in evidence_ids if e in idx]
+
+    metric_ids = sorted({l["metric_id"] for l in leaks if l.get("metric_id")})
+    # always expose the three stage metric IDs for the region too
+    for stage in ("contact", "booking", "show"):
+        metric_ids.append(engine.metric_id_for(stage, region))
+    metric_ids = sorted(set(metric_ids))
+
+    return {
+        "region": {"region_id": region, "name": engine.REGION_NAME.get(region)},
+        "date_range": {"start": engine.CURRENT_START.date().isoformat(),
+                       "end": engine.REFERENCE_DATE.date().isoformat()},
+        "metrics": metrics,
+        "prior_metrics": prior,
+        "metric_ids": metric_ids,
+        "leakages": [{k: l.get(k) for k in ("leakage_id", "type", "severity", "severity_score",
+                      "metric", "metric_id", "observed", "threshold", "clinic_code", "stage",
+                      "opportunity_group_id", "opportunity_relationship",
+                      "recoverable_appointments", "recoverable_value_inr",
+                      "owner_role", "evidence_ids", "confidence")} for l in leaks],
+        "opportunity_summary": {k: summary[k] for k in
+                                ("unique_opportunity_pools", "related_alerts",
+                                 "estimated_attendance_opportunity", "scenario_value_inr")},
+        "deterministic_confidence_ceiling": deterministic_confidence_ceiling(leaks),
+        "evidence": evidence,
+        "data_quality": dq,
+        "requested_question": question,
+        "role": role,
+    }
+
+
+def allowlists(facts: dict):
+    allowed_metric_ids = set(facts["metric_ids"])
+    allowed_evidence_ids = {e["evidence_id"] for e in facts["evidence"]}
+    return allowed_metric_ids, allowed_evidence_ids
+
+
+# ---------------------------------------------------------------------------
+# Deterministic brief (default, trusted numeric renderer)
+# ---------------------------------------------------------------------------
+TYPE_LABEL = {
+    "slow_first_contact": "First-contact response is too slow",
+    "low_contact_rate": "Contact rate is below the best region",
+    "contact_to_booking_drop": "Connected leads are not converting to bookings",
+    "high_no_show_rate": "A clinic has an excessive no-show rate",
+    "high_cost_per_attended": "Cost per attended appointment is inflated (diagnostic)",
+    "clinic_concentration": "One clinic concentrates most recoverable loss",
+    "repeat_complaint_context": "Repeat complaint context at a clinic",
+}
+
+
+def deterministic_brief(facts: dict, mode: str = "deterministic",
+                        reason_code: Optional[str] = None) -> dict:
     region = facts["region"]
     leaks = facts["leakages"]
     rname = region["name"]
@@ -124,34 +183,31 @@ def _deterministic_brief(facts: dict) -> dict:
             "headline": f"Insufficient evidence to brief {rname} Region",
             "summary": "Critical source data is missing or below the identity-match threshold.",
             "top_findings": [], "recommended_interventions": [],
-            "caveats": ["Briefing readiness rule not met."],
-            "insufficient_evidence": True, "mode": "deterministic",
+            "limitations": ["Briefing readiness rule not met"],
+            "insufficient_evidence": True, "mode": "deterministic_fallback",
+            "fallback_reason_code": reason_code or "INSUFFICIENT_EVIDENCE",
         }
 
     top = leaks[:3]
     findings, interventions = [], []
-    type_label = {
-        "slow_first_contact": "First-contact response is too slow",
-        "low_contact_rate": "Contact rate is below the best region",
-        "contact_to_booking_drop": "Connected leads are not converting to bookings",
-        "high_no_show_rate": "A clinic has an excessive no-show rate",
-        "high_cost_per_attended": "Cost per attended appointment is inflated",
-        "clinic_concentration": "One clinic concentrates most recoverable loss",
-        "repeat_complaint_context": "Repeat complaint context at a clinic",
-    }
     for l in top:
-        label = type_label.get(l["type"], l["type"])
+        label = TYPE_LABEL.get(l["type"], l["type"])
         scope = f" at clinic {l['clinic_code']}" if l.get("clinic_code") else ""
+        rel = l.get("opportunity_relationship")
+        if rel == "diagnostic":
+            why = "Diagnostic signal — investigate; it does not create an independent recovery pool."
+        else:
+            why = (f"Tied to a {l.get('opportunity_relationship')} opportunity pool "
+                   f"({l['recoverable_appointments']} appts, ~INR {l['recoverable_value_inr']:,}). Not additive across related alerts.")
         findings.append({
-            "finding": f"{label}{scope} (observed {l['observed']}, threshold {l['threshold']}).",
-            "why_it_matters": f"Estimated {l['recoverable_appointments']} recoverable appointments "
-                              f"(~INR {l['recoverable_value_inr']:,}) tied to this {l['severity']} leakage.",
-            "metric_ids": [f"METRIC-{l['metric'].upper()}-{region['region_id']}"],
+            "finding": f"{label}{scope}.",
+            "why_it_matters": why,
+            "metric_ids": [l["metric_id"]] if l.get("metric_id") else [],
             "evidence_ids": l["evidence_ids"][:4],
             "confidence": l["confidence"],
         })
         interventions.append({
-            "title": f"Address {label.lower()}{scope}",
+            "title": f"Review and act on {label.lower()}{scope}",
             "owner_role": l["owner_role"],
             "priority": "high" if l["severity"] in ("Critical", "High") else "medium",
             "evidence_ids": l["evidence_ids"][:2],
@@ -160,105 +216,85 @@ def _deterministic_brief(facts: dict) -> dict:
 
     headline = (f"{rname} Region is losing paid-search efficiency after lead capture"
                 if top else f"{rname} Region shows no material leakage")
-    summary = (f"{rname} spend is INR {facts['metrics']['spend_inr']:,} across "
-               f"{facts['metrics']['leads']} leads, but only {facts['metrics']['attended']} attended "
-               f"appointments. The loss begins after capture, not in spend volume."
+    summary = (f"{rname} loss begins after capture across {facts['opportunity_summary']['unique_opportunity_pools']} "
+               f"unique opportunity pools. Numbers shown are deterministic and non-additive across related alerts."
                if top else f"{rname} is performing within thresholds across the funnel.")
     return {
         "brief_id": f"BRIEF-{region['region_id']}-DET",
         "headline": headline, "summary": summary,
         "top_findings": findings[:3],
         "recommended_interventions": interventions[:3],
-        "caveats": ["Deterministic briefing. First-touch attribution. Estimates, not realized revenue."],
+        "limitations": ["Deterministic briefing", "First-touch attribution",
+                        "Estimates, not realized revenue"],
         "insufficient_evidence": False,
-        "mode": "deterministic",
+        "mode": mode,
+        "fallback_reason_code": reason_code,
     }
 
 
-def _validate(brief: dict, allowed_evidence: set, allowed_metrics: set) -> bool:
-    try:
-        if not isinstance(brief.get("top_findings"), list):
-            return False
-        if len(brief["top_findings"]) > 3 or len(brief.get("recommended_interventions", [])) > 3:
-            return False
-        text = json.dumps(brief).lower()
-        # privacy: reject phone/email-like patterns
-        if re.search(r"\b\d{10}\b", text) or re.search(r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}", text):
-            return False
-        for f in brief["top_findings"]:
-            for e in f.get("evidence_ids", []):
-                if e not in allowed_evidence:
-                    return False
-        for i in brief.get("recommended_interventions", []):
-            if not i.get("human_approval_required", False):
-                return False
-            for e in i.get("evidence_ids", []):
-                if e not in allowed_evidence:
-                    return False
-        return True
-    except Exception:
-        return False
-
-
-async def generate_brief(region: str, question: str = "", role: str = "regional_head",
-                         use_model: bool = True, facts: Optional[dict] = None) -> dict:
-    if facts is None:
-        facts = build_facts(region, question, role)
-    allowed_evidence = {e["evidence_id"] for e in facts["evidence"]}
-    allowed_metrics = set(facts["metric_ids"])
-
-    det = _deterministic_brief(facts)
+# ---------------------------------------------------------------------------
+# Model synthesis (explicit, validated)
+# ---------------------------------------------------------------------------
+async def synthesize(facts: dict, question: str, role: str,
+                     max_tokens: int = 700, timeout: int = 12):
+    """Call the model, validate strictly. Returns (brief_dict, reason_code|None)."""
+    det = deterministic_brief(facts)
     if det["insufficient_evidence"]:
-        det["fallback_active"] = True
-        return det
+        return det, "INSUFFICIENT_EVIDENCE"
+    if not EMERGENT_LLM_KEY:
+        return deterministic_brief(facts, "deterministic_fallback", "MODEL_DISABLED"), "MODEL_DISABLED"
 
-    if not use_model or not EMERGENT_LLM_KEY:
-        det["fallback_active"] = True
-        return det
+    allowed_metric_ids, allowed_evidence_ids = allowlists(facts)
+    ceiling = facts["deterministic_confidence_ceiling"]
 
-    # Slim payload keeps the model fast (PRD target < 10s).
     slim = {
         "region": facts["region"],
         "metrics": {k: facts["metrics"][k] for k in
-                    ("spend_inr", "leads", "contact_rate", "median_first_contact_delay_min",
-                     "uncontacted_24h", "booking_rate", "show_rate", "attended",
-                     "cost_per_attended_inr")},
-        "prior_metrics": {k: facts["prior_metrics"][k] for k in
-                          ("contact_rate", "show_rate", "booking_rate", "cost_per_attended_inr")},
-        "leakages": facts["leakages"][:5],
+                    ("contact_rate", "median_first_contact_delay_min", "booking_rate",
+                     "show_rate", "attended", "cost_per_attended_inr")},
+        "leakages": [{k: l.get(k) for k in
+                      ("type", "severity", "metric_id", "opportunity_relationship",
+                       "owner_role", "evidence_ids", "confidence")} for l in facts["leakages"][:5]],
+        "allowed_metric_ids": sorted(allowed_metric_ids),
+        "allowed_evidence_ids": sorted(allowed_evidence_ids),
         "evidence": [{"evidence_id": e["evidence_id"], "summary": e["summary"]}
                      for e in facts["evidence"][:14]],
-        "metric_ids": facts["metric_ids"],
-        "recoverable": facts["recoverable"],
+        "deterministic_confidence_ceiling": ceiling,
     }
 
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = (
-            LlmChat(
-                api_key=EMERGENT_LLM_KEY,
-                session_id=f"brief-{region}",
-                system_message=SYSTEM_MESSAGE,
-            )
+            LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"brief-{facts['region']['region_id']}",
+                    system_message=SYSTEM_MESSAGE)
             .with_model("anthropic", "claude-sonnet-4-6")
-            .with_params(max_tokens=2000)
+            .with_params(max_tokens=max_tokens)
         )
         user = UserMessage(text=(
             f"Question: {question or SUPPORTED_QUESTIONS[0]}\nRole: {role}\n\n"
-            f"FACTS (authoritative, do not recompute):\n{json.dumps(slim, default=str)}\n\n"
-            "Produce the brief now as compact pure JSON. Be terse."
+            f"FACTS (authoritative; cite only the allowlisted IDs; no numbers in prose):\n"
+            f"{json.dumps(slim, default=str)}\n\nProduce the brief now as compact pure JSON."
         ))
-        raw = await chat.send_message(user)
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        parsed = json.loads(m.group(0) if m else raw)
-        if _validate(parsed, allowed_evidence, allowed_metrics):
-            parsed["mode"] = "model"
-            parsed["fallback_active"] = False
-            parsed.setdefault("insufficient_evidence", False)
-            return parsed
-    except Exception as e:  # noqa: BLE001
-        det["model_error"] = str(e)[:200]
+        raw = await asyncio.wait_for(chat.send_message(user), timeout=timeout)
+    except asyncio.TimeoutError:
+        return deterministic_brief(facts, "deterministic_fallback", "MODEL_TIMEOUT"), "MODEL_TIMEOUT"
+    except Exception:
+        return deterministic_brief(facts, "deterministic_fallback", "MODEL_PROVIDER_ERROR"), "MODEL_PROVIDER_ERROR"
 
-    det["fallback_active"] = True
-    return det
+    cleaned = (raw or "").replace("```json", "").replace("```", "").strip()
+    m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if not m:
+        return deterministic_brief(facts, "deterministic_fallback", "MODEL_OUTPUT_SCHEMA_FAILED"), "MODEL_OUTPUT_SCHEMA_FAILED"
+    try:
+        parsed = json.loads(m.group(0))
+    except Exception:
+        return deterministic_brief(facts, "deterministic_fallback", "MODEL_OUTPUT_SCHEMA_FAILED"), "MODEL_OUTPUT_SCHEMA_FAILED"
+
+    ok, reason, clean = validate_brief_output(parsed, allowed_metric_ids, allowed_evidence_ids, ceiling)
+    if not ok:
+        return deterministic_brief(facts, "deterministic_fallback", reason), reason
+
+    clean["brief_id"] = f"BRIEF-{facts['region']['region_id']}-AI"
+    clean["mode"] = "model"
+    clean["fallback_reason_code"] = None
+    return clean, None

@@ -61,7 +61,7 @@ export default function Leakages() {
                         <td className="px-3 py-2">{l.region}</td>
                         <td className="px-3 py-2 font-mono text-[11px]">{l.clinic_code || "Region-wide"}</td>
                         <td className="px-3 py-2 whitespace-nowrap">{l.stage}</td>
-                        <td className="px-3 py-2">{num(l.affected_records?.length || 0)}</td>
+                        <td className="px-3 py-2">{num(l.affected_record_count ?? l.affected_records?.length ?? 0)}</td>
                         <td className="px-3 py-2">{num(l.recoverable_appointments)} appts</td>
                         <td className="px-3 py-2 font-semibold">{inr(l.recoverable_value_inr)}</td>
                         <td className="px-3 py-2">
