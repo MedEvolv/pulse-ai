@@ -20,9 +20,11 @@ from brief_validation import validate_brief_output
 load_dotenv()
 
 PROMPT_VERSION = "brief-2.0.0"
-# LLM config. Model synthesis uses Vertex AI Gemini (ADR-0007). LLM_API_KEY is a
-# Vertex express-mode API key (the primary path); alternatively, service-account /
-# ADC auth is used when GOOGLE_CLOUD_PROJECT is set instead. Emergent removed (ADR-0006).
+# LLM config (ADR-0007). Auth method picks the endpoint (see _genai_client):
+#   GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_CLOUD_PROJECT -> Vertex AI (uses GCP credits)
+#   LLM_API_KEY                                        -> Gemini Developer API (API keys
+#                                                         are NOT accepted by Vertex).
+# Emergent removed (ADR-0006).
 LLM_API_KEY = os.environ.get("LLM_API_KEY")
 LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-2.5-flash")
 GCP_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -242,19 +244,34 @@ def deterministic_brief(facts: dict, mode: str = "deterministic",
 # Model synthesis (explicit, validated)
 # ---------------------------------------------------------------------------
 def _genai_client():
-    """Build a Vertex AI Gemini client (ADR-0007).
+    """Build a Gemini client (ADR-0007, corrected).
 
-    Express mode (LLM_API_KEY) is the primary path: a single key, no project/ADC.
-    Falls back to service-account / ADC auth when GOOGLE_CLOUD_PROJECT is set.
+    IMPORTANT (learned the hard way): API keys are NOT accepted by Vertex AI —
+    Vertex requires OAuth2 / a service account. API keys only work with the Gemini
+    Developer API (`generativelanguage`). So the auth method picks the endpoint:
+
+    - GOOGLE_SERVICE_ACCOUNT_JSON  -> Vertex AI (uses GCP credits; no-train terms).
+    - GOOGLE_CLOUD_PROJECT (ADC)    -> Vertex AI (local / Google runtimes).
+    - LLM_API_KEY                   -> Gemini Developer API (NOT Vertex).
+
     The SDK is imported lazily so the deterministic path needs no LLM dependency.
     """
     from google import genai  # google-genai SDK
-    if LLM_API_KEY:
-        return genai.Client(vertexai=True, api_key=LLM_API_KEY)
+    sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+    if sa_json:
+        from google.oauth2 import service_account
+        info = json.loads(sa_json)
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        return genai.Client(vertexai=True, credentials=creds,
+                            project=GCP_PROJECT or info.get("project_id"), location=GCP_LOCATION)
     if GCP_PROJECT:
         return genai.Client(vertexai=True, project=GCP_PROJECT, location=GCP_LOCATION)
+    if LLM_API_KEY:
+        return genai.Client(api_key=LLM_API_KEY)  # Gemini Developer API — never vertexai with a key
     raise NotImplementedError(
-        "No Vertex credentials: set LLM_API_KEY (express key) or GOOGLE_CLOUD_PROJECT (ADC).")
+        "No LLM credentials: set GOOGLE_SERVICE_ACCOUNT_JSON (Vertex), GOOGLE_CLOUD_PROJECT "
+        "(Vertex via ADC), or LLM_API_KEY (Gemini Developer API).")
 
 
 async def _complete(system_message: str, user_text: str, max_tokens: int) -> str:

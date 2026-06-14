@@ -35,8 +35,28 @@ deterministic path carries no LLM dependency.
 ## Consequences
 
 - `google-genai` added to `requirements.txt`; installed in the deploy but unused
-  until `LLM_API_KEY` is set (model off by default — runtime unchanged today).
-- Requires GCP setup the repo cannot do: enable the Vertex AI API, create the
-  key/service account, set the env vars. Verification of a live call is gated on
-  those credentials (tracked in the enablement issue).
+  until credentials are set (model off by default — runtime unchanged today).
 - Supersedes ADR-0006's tentative "direct Anthropic" successor note.
+
+## Correction (2026-06-14) — auth method picks the endpoint
+
+The initial assumption of a "Vertex express API key" was **wrong**. Verified live:
+
+- **API key → Vertex AI** fails with `401 UNAUTHENTICATED: API keys are not
+  supported by this API`. Vertex requires OAuth2 / a service account.
+- **API key → Gemini Developer API** (`generativelanguage`) authenticates, but its
+  billing is the separate **AI Studio prepay wallet** — which returned
+  `429 RESOURCE_EXHAUSTED: prepayment credits are depleted`. The GCP trial credits
+  do **not** apply to the Developer API.
+- **Service account → Vertex** (the way to actually spend GCP credits) is blocked
+  on this account by org policy `constraints/iam.disableServiceAccountKeyCreation`
+  ("Key creation is not allowed") — only an org admin can lift it.
+
+`_genai_client()` now routes by auth method: `GOOGLE_SERVICE_ACCOUNT_JSON` or
+`GOOGLE_CLOUD_PROJECT` → Vertex; `LLM_API_KEY` → Gemini Developer API (never Vertex).
+
+**Current state:** live model synthesis is blocked by account/billing constraints,
+not code. The deterministic brief is fully functional and is what the demo serves.
+Two unblocks, both requiring user/admin action: (i) an org admin disables the SA-key
+constraint → service-account + Vertex on GCP credits; or (ii) fund the Gemini
+Developer-API billing → the existing API key works. Model stays off until then.
