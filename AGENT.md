@@ -318,9 +318,10 @@ It must not claim:
 - Uvicorn `0.34.0`;
 - Pydantic `2.10.4`;
 - Motor `3.6.0`;
-- MongoDB for mutable intervention/session state;
-- `emergentintegrations==0.2.0`;
+- MongoDB for mutable intervention/session state (legacy; superseded by the
+  repository seam, ADR-0002);
 - deterministic synthetic engine for source data and metrics.
+- Emergent removed (ADR-0006): no `emergentintegrations` dependency.
 
 ### 6.2 Frontend
 
@@ -333,7 +334,8 @@ It must not claim:
 
 ### 6.3 Model
 
-- Claude Sonnet 4.6 through Emergent integrations in the current design;
+- Claude Sonnet 4.6 via the Anthropic API directly (Emergent removed, ADR-0006);
+  the direct-Anthropic synthesis path is a tracked follow-up, deterministic until wired;
 - model usage off by default;
 - deterministic response always available;
 - explicit model request required;
@@ -1835,11 +1837,13 @@ Reproducibility (resolved 2026-06-13, Track A):
   from `origin/main` at `7f9f2f9`. The serverless entrypoint (`backend/api/index.py`
   + `backend/vercel.json`), the in-memory fallback, and the `api.js` HTML-response
   guard are committed.
-- `emergentintegrations==0.2.0` is **not on public PyPI**, so it is commented out of
-  `requirements.txt` (it made `pip/uv install` unsatisfiable on Vercel/CI/fresh
-  local). The deployed backend never imports it (model off). NOTE: if Emergent's
-  auto-commit bot regenerates `requirements.txt` and re-adds the pin, the Vercel
-  build will break again — re-comment it before redeploying.
+- `emergentintegrations` has been **removed** (ADR-0006), so the old "re-comment
+  the pin before redeploying" hazard no longer applies. The model path is decoupled
+  behind a neutral `_complete()` seam in `briefing.py`; its direct-Anthropic
+  implementation is a tracked follow-up. NOTE: the Emergent integration must be
+  disconnected on the Emergent platform itself so its auto-commit bot stops pushing
+  to `main` — deleting `.emergent/` in-repo does not do that. Until disconnected,
+  keep reading the bot's diffs (§32, above).
 
 No live shared database was provisioned. This deployment is a synthetic demo.
 

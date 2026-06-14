@@ -20,7 +20,9 @@ from brief_validation import validate_brief_output
 load_dotenv()
 
 PROMPT_VERSION = "brief-2.0.0"
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
+# Provider-neutral LLM key (Emergent removed — ADR-0006). When the direct
+# Anthropic synthesis path is wired, set LLM_API_KEY to an Anthropic API key.
+LLM_API_KEY = os.environ.get("LLM_API_KEY")
 
 SUPPORTED_QUESTIONS = [
     "Why is North Region underperforming?",
@@ -235,13 +237,24 @@ def deterministic_brief(facts: dict, mode: str = "deterministic",
 # ---------------------------------------------------------------------------
 # Model synthesis (explicit, validated)
 # ---------------------------------------------------------------------------
+async def _complete(system_message: str, user_text: str, max_tokens: int) -> str:
+    """Direct LLM completion seam. Emergent removed (ADR-0006).
+
+    The direct Anthropic implementation (claude-sonnet-4-6 via the `anthropic`
+    SDK, keyed by LLM_API_KEY) is a tracked follow-up. Until it is wired and
+    verified against a real key, this raises NotImplementedError, which
+    `synthesize` maps to MODEL_PROVIDER_UNCONFIGURED -> deterministic brief.
+    """
+    raise NotImplementedError("Direct Anthropic brief synthesis not wired yet")
+
+
 async def synthesize(facts: dict, question: str, role: str,
                      max_tokens: int = 700, timeout: int = 12):
     """Call the model, validate strictly. Returns (brief_dict, reason_code|None)."""
     det = deterministic_brief(facts)
     if det["insufficient_evidence"]:
         return det, "INSUFFICIENT_EVIDENCE"
-    if not EMERGENT_LLM_KEY:
+    if not LLM_API_KEY:
         return deterministic_brief(facts, "deterministic_fallback", "MODEL_DISABLED"), "MODEL_DISABLED"
 
     allowed_metric_ids, allowed_evidence_ids = allowlists(facts)
@@ -262,22 +275,18 @@ async def synthesize(facts: dict, question: str, role: str,
         "deterministic_confidence_ceiling": ceiling,
     }
 
+    user_text = (
+        f"Question: {question or SUPPORTED_QUESTIONS[0]}\nRole: {role}\n\n"
+        f"FACTS (authoritative; cite only the allowlisted IDs; no numbers in prose):\n"
+        f"{json.dumps(slim, default=str)}\n\nProduce the brief now as compact pure JSON."
+    )
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = (
-            LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"brief-{facts['region']['region_id']}",
-                    system_message=SYSTEM_MESSAGE)
-            .with_model("anthropic", "claude-sonnet-4-6")
-            .with_params(max_tokens=max_tokens)
-        )
-        user = UserMessage(text=(
-            f"Question: {question or SUPPORTED_QUESTIONS[0]}\nRole: {role}\n\n"
-            f"FACTS (authoritative; cite only the allowlisted IDs; no numbers in prose):\n"
-            f"{json.dumps(slim, default=str)}\n\nProduce the brief now as compact pure JSON."
-        ))
-        raw = await asyncio.wait_for(chat.send_message(user), timeout=timeout)
+        raw = await asyncio.wait_for(
+            _complete(SYSTEM_MESSAGE, user_text, max_tokens=max_tokens), timeout=timeout)
     except asyncio.TimeoutError:
         return deterministic_brief(facts, "deterministic_fallback", "MODEL_TIMEOUT"), "MODEL_TIMEOUT"
+    except NotImplementedError:
+        return deterministic_brief(facts, "deterministic_fallback", "MODEL_PROVIDER_UNCONFIGURED"), "MODEL_PROVIDER_UNCONFIGURED"
     except Exception:
         return deterministic_brief(facts, "deterministic_fallback", "MODEL_PROVIDER_ERROR"), "MODEL_PROVIDER_ERROR"
 
