@@ -1,6 +1,15 @@
 # Unified Database — ReputationOS + Pulse AI
 
-**Status:** plan v0.1 · 2026-06-13
+**Status:** **PROVISIONED** v0.1 · 2026-06-14 (was: plan, 2026-06-13)
+
+> Supabase project **`revops-unified-db`** (ref `gtgzksknyigupetnextu`, region `ap-south-1`,
+> org Toothpracto, free tier) is live. `schema.sql` applied (migration `unified_schema_v0_1`)
+> and `seed-crosswalk.sql` applied (`seed_crosswalk_v0_1`). Verified: 14 regions · 17 clinics ·
+> 24 aliases · 31 actors; the one cross-product clinic (Kamla Nagar = pulse `DL-KMN-01` =
+> clove/reputationos `5129`) resolves correctly. Security advisor clean (tables are in
+> `core`/`pulse`/`reputationos`, not API-exposed `public`).
+> **Not yet done:** RLS/roles (§4), and connecting the apps (the Pg adapter, issue #1 — needs
+> the pooled connection string set as each app's `DATABASE_URL`). Data is still synthetic.
 **Goal:** one shared, accessible database both products read and write, so ReputationOS and Pulse AI stay aligned on the same clinics, owners, evidence, events, and interventions instead of drifting on separate synthetic stores.
 
 This folder is the source of truth for the schema. The strategic write-up lives in the vault at

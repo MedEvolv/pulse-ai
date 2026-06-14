@@ -1437,7 +1437,10 @@ Plan a separate Vite migration after:
 
 ### Strategic/open
 
-13. Unified Supabase database is proposed, not provisioned.
+13. Unified Supabase database — **PROVISIONED** (2026-06-14): project `revops-unified-db`
+    (ref `gtgzksknyigupetnextu`, `ap-south-1`); `schema.sql` + `seed-crosswalk.sql` applied
+    and verified (14/17/24/31). Apps not yet connected (Pg adapter #1 needs `DATABASE_URL`);
+    RLS/roles still pending. See `docs/unified-database/README.md`.
 14. Canonical clinic identity crosswalk — **built v0.1 at demo scope**
     (`docs/unified-database/seed-crosswalk.sql` + `crosswalk.md`). One proven cross-product
     identity (Kamla Nagar: Pulse `DL-KMN-01` = Clove `5129`); 17 canonical clinics, 31 actors,
