@@ -19,17 +19,18 @@ import briefing
 import engine
 import evaluation
 import model_budget
+import repository
 
 load_dotenv()
 
 
 # ----------------------------------------------------------------------------
-# Storage: MongoDB when MONGO_URL is set, otherwise an in-memory fallback so the
-# app runs self-contained (e.g. Vercel serverless) on deterministic synthetic
-# data. The mutable collections are `interventions` and `proofs`; everything
-# else is computed deterministically by the engine. In-memory state is
-# per-process and NOT durable across serverless cold starts — acceptable for the
-# synthetic demo; set MONGO_URL for durable, session-isolated persistence.
+# Storage. The mutable fabric (interventions + closure proofs) lives behind the
+# InterventionRepository seam in `repository.py` (ADR-0002) — selected by env.
+# `db` below backs ONLY the model budget/cache (issue #4 migrates it to the
+# repository too): MongoDB when MONGO_URL is set, else an in-memory fallback so
+# the app runs self-contained (e.g. Vercel serverless). The deterministic
+# catalogue is never persisted — `engine.py` owns it (ADR-0001).
 # ----------------------------------------------------------------------------
 class _MemCursor:
     def __init__(self, docs):
@@ -93,8 +94,6 @@ class _MemCollection:
 
 class _MemDB:
     def __init__(self):
-        self.interventions = _MemCollection()
-        self.proofs = _MemCollection()
         self.model_budget = _MemCollection()
         self.model_cache = _MemCollection()
 
@@ -106,6 +105,9 @@ if MONGO_URL:
     db = client[DB_NAME]
 else:
     db = _MemDB()
+
+# The mutable-fabric seam (ADR-0002): interventions + closure proofs.
+repo = repository.build_repository()
 
 app = FastAPI(title="Pulse AI")
 
@@ -123,22 +125,13 @@ app.add_middleware(
 REGION_IDS = {r["region_id"] for r in engine.REGION_DEFS}
 CLINIC_CODES = {c["clinic_code"] for c in engine.CLINICS}
 OWNER_IDS = {o["owner_id"] for o in engine.OWNERS}
-REQUIRED_CONSECUTIVE_DAYS = 5
 
-# CP-05 accountability state machine (no direct closure).
-TRANSITIONS = {
-    "Detected": ["Reviewed", "Assigned", "Rejected"],
-    "Reviewed": ["Assigned", "Rejected"],
-    "Assigned": ["In Progress", "Reviewed", "Rejected"],
-    "In Progress": ["Proof Required", "Rejected"],
-    "Proof Required": ["Closure Claimed", "Rejected"],  # Closure Claimed only via /proof
-    "Closure Claimed": ["Closed", "Reopened"],            # Closed only via /verify
-    "Closed": ["Reopened"],
-    "Reopened": ["In Progress", "Assigned", "Rejected"],
-    "Rejected": ["Reviewed"],
-}
-PATCH_BLOCKED = {"Closed", "Closure Claimed"}  # require dedicated proof/verify endpoints
-ALL_STATUSES = list(TRANSITIONS.keys())
+# CP-05 accountability state machine + closure rule now live with the fabric
+# (repository.py). Re-exported here for the routes and the /api/meta response.
+REQUIRED_CONSECUTIVE_DAYS = repository.REQUIRED_CONSECUTIVE_DAYS
+TRANSITIONS = repository.TRANSITIONS
+PATCH_BLOCKED = repository.PATCH_BLOCKED
+ALL_STATUSES = repository.ALL_STATUSES
 
 
 def _now_iso():
@@ -151,39 +144,10 @@ def get_session(x_demo_session_id: Optional[str] = Header(default=None)) -> str:
 
 
 # ----------------------------------------------------------------------------
-# Per-session intervention seeding (CP-07)
+# Per-session intervention seeding (CP-07) — delegated to the fabric repository.
 # ----------------------------------------------------------------------------
 async def ensure_session_seed(session_id: str):
-    existing = await db.interventions.count_documents({"session_id": session_id})
-    if existing:
-        return
-    leaks = engine.build_leakages()
-    defaults = [
-        ("OWNER-NEHA", "Assigned", "2026-06-17"),
-        ("OWNER-VIKRAM", "In Progress", "2026-06-16"),
-        (None, "Detected", None),
-    ]
-    seeds = []
-    for i, l in enumerate(leaks[:6]):
-        owner, status, due = defaults[i] if i < len(defaults) else (None, "Detected", None)
-        seeds.append({
-            "intervention_id": f"INT-{i+1:04d}",
-            "session_id": session_id,
-            "leakage_id": l["leakage_id"],
-            "title": f"Remediate {l['type'].replace('_', ' ')} in {l['region']}"
-                     + (f" / {l['clinic_code']}" if l.get("clinic_code") else ""),
-            "owner_id": owner,
-            "status": status,
-            "due_date": due,
-            "closure_criteria": f"Provide proof the metric crossed back over threshold for "
-                                f"{REQUIRED_CONSECUTIVE_DAYS} consecutive days.",
-            "external_writeback": False,
-            "proof_id": None,
-            "notes": [],
-            "history": [{"at": _now_iso(), "event": "seeded", "status": status}],
-        })
-    if seeds:
-        await db.interventions.insert_many(seeds)
+    await repo.seed_session(session_id)
 
 
 @app.on_event("startup")
@@ -335,7 +299,7 @@ def _delta(cur, prev):
 
 
 async def _intervention_map(session_id):
-    return {i["leakage_id"]: i async for i in db.interventions.find({"session_id": session_id})}
+    return await repo.map_by_leakage(session_id)
 
 
 # ----------------------------------------------------------------------------
@@ -493,11 +457,11 @@ async def leakage_detail(leakage_id: str, session_id: str = Depends(get_session)
     idx = engine.get_evidence_index()
     evidence = [idx[e] for e in l["evidence_ids"] if e in idx]
     mev = engine.build_metric_evidence().get(l.get("metric_evidence_id"))
-    iv = await db.interventions.find_one({"leakage_id": leakage_id, "session_id": session_id})
+    iv = await repo.find_by_leakage(session_id, leakage_id)
     proof = None
     if iv and iv.get("proof_id"):
-        proof = _clean(await db.proofs.find_one({"proof_id": iv["proof_id"], "session_id": session_id}))
-    iv_clean = _clean(iv)
+        proof = await repo.find_proof(session_id, iv["proof_id"])
+    iv_clean = iv
     if iv_clean:
         iv_clean["allowed_transitions"] = [s for s in TRANSITIONS.get(iv_clean["status"], []) if s not in PATCH_BLOCKED]
         iv_clean["can_claim_proof"] = iv_clean["status"] == "Proof Required"
@@ -710,7 +674,7 @@ def _hydrate(it):
 @app.get("/api/interventions")
 async def list_interventions(session_id: str = Depends(get_session)):
     await ensure_session_seed(session_id)
-    items = [_hydrate(_clean(i)) async for i in db.interventions.find({"session_id": session_id})]
+    items = [_hydrate(i) for i in await repo.list(session_id)]
     return {"interventions": items, "session_id": session_id, "state_machine": TRANSITIONS}
 
 
@@ -723,29 +687,14 @@ async def create_intervention(req: InterventionCreate, session_id: str = Depends
         raise HTTPException(404, "Leakage not found")
     if req.owner_id and req.owner_id not in OWNER_IDS:
         raise HTTPException(422, "unknown owner")
-    existing = await db.interventions.find_one({"leakage_id": req.leakage_id, "session_id": session_id})
+    existing = await repo.find_by_leakage(session_id, req.leakage_id)
     if existing:
-        return _clean(existing)
-    count = await db.interventions.count_documents({"session_id": session_id})
-    doc = {
-        "intervention_id": f"INT-{count+1:04d}", "session_id": session_id,
-        "leakage_id": req.leakage_id,
-        "title": req.title or f"Remediate {l['type'].replace('_', ' ')} in {l['region']}",
-        "owner_id": req.owner_id,
-        "status": "Assigned" if req.owner_id else "Detected",
-        "due_date": req.due_date,
-        "closure_criteria": f"Provide proof the metric crossed back over threshold for "
-                            f"{REQUIRED_CONSECUTIVE_DAYS} consecutive days.",
-        "external_writeback": False, "proof_id": None, "notes": [],
-        "history": [{"at": _now_iso(), "event": "created",
-                     "status": "Assigned" if req.owner_id else "Detected"}],
-    }
-    await db.interventions.insert_one(doc)
-    return _clean(doc)
+        return existing
+    return await repo.create(session_id, l, req.owner_id, req.due_date, req.title)
 
 
 async def _get_intervention(intervention_id, session_id):
-    doc = await db.interventions.find_one({"intervention_id": intervention_id, "session_id": session_id})
+    doc = await repo.find(session_id, intervention_id)
     if not doc:
         raise HTTPException(404, "Intervention not found")
     return doc
@@ -776,8 +725,7 @@ async def update_intervention(intervention_id: str, req: InterventionUpdate,
         notes = doc.get("notes", [])
         notes.append({"at": _now_iso(), "text": req.note})
         update["notes"] = notes
-    await db.interventions.update_one(
-        {"intervention_id": intervention_id, "session_id": session_id}, {"$set": update})
+    await repo.save(session_id, intervention_id, update)
     return _clean(await _get_intervention(intervention_id, session_id))
 
 
@@ -790,25 +738,21 @@ async def claim_closure(intervention_id: str, req: ProofClaim, session_id: str =
         raise HTTPException(422, f"Proof requires at least {REQUIRED_CONSECUTIVE_DAYS} consecutive days of recovery.")
     if not req.evidence_ids:
         raise HTTPException(422, "Proof requires at least one supporting evidence ID.")
-    count = await db.proofs.count_documents({"session_id": session_id})
-    proof = {
-        "proof_id": f"PROOF-{count+1:04d}", "session_id": session_id,
+    proof = await repo.create_proof(session_id, {
         "intervention_id": intervention_id, "leakage_id": doc["leakage_id"],
         "metric_id": req.metric_id, "metric_evidence_id": req.metric_evidence_id,
         "observed_before": req.observed_before, "observed_after": req.observed_after,
         "threshold": req.threshold, "window_start": req.window_start, "window_end": req.window_end,
         "consecutive_days": req.consecutive_days, "evidence_ids": req.evidence_ids,
         "note": req.note, "claimed_at": _now_iso(), "verification": None,
-    }
-    await db.proofs.insert_one(dict(proof))
+    })
     history = doc.get("history", [])
     history.append({"at": _now_iso(), "event": "closure_claimed", "status": "Closure Claimed",
                     "proof_id": proof["proof_id"]})
-    await db.interventions.update_one(
-        {"intervention_id": intervention_id, "session_id": session_id},
-        {"$set": {"status": "Closure Claimed", "proof_id": proof["proof_id"], "history": history}})
+    await repo.save(session_id, intervention_id,
+                    {"status": "Closure Claimed", "proof_id": proof["proof_id"], "history": history})
     return {"intervention": _clean(await _get_intervention(intervention_id, session_id)),
-            "proof": _clean(proof)}
+            "proof": proof}
 
 
 @app.post("/api/interventions/{intervention_id}/verify")
@@ -820,9 +764,7 @@ async def verify_closure(intervention_id: str, req: VerifyRequest, session_id: s
         raise HTTPException(409, "No proof record to verify.")
     verification = {"verified_by": req.verified_by or "reviewer",
                     "verified_at": _now_iso(), "decision": req.decision, "note": req.note}
-    await db.proofs.update_one(
-        {"proof_id": doc["proof_id"], "session_id": session_id},
-        {"$set": {"verification": verification}})
+    await repo.save_proof(session_id, doc["proof_id"], {"verification": verification})
     new_status = "Closed" if req.decision == "approved" else "Reopened"
     history = doc.get("history", [])
     history.append({"at": _now_iso(), "event": f"verification_{req.decision}", "status": new_status,
@@ -830,8 +772,7 @@ async def verify_closure(intervention_id: str, req: VerifyRequest, session_id: s
     update = {"status": new_status, "history": history}
     if new_status == "Reopened":
         update["proof_id"] = None
-    await db.interventions.update_one(
-        {"intervention_id": intervention_id, "session_id": session_id}, {"$set": update})
+    await repo.save(session_id, intervention_id, update)
     return _clean(await _get_intervention(intervention_id, session_id))
 
 
@@ -840,7 +781,6 @@ async def verify_closure(intervention_id: str, req: VerifyRequest, session_id: s
 # ----------------------------------------------------------------------------
 @app.post("/api/session/reset")
 async def reset_session(session_id: str = Depends(get_session)):
-    await db.interventions.delete_many({"session_id": session_id})
-    await db.proofs.delete_many({"session_id": session_id})
+    await repo.reset(session_id)
     await ensure_session_seed(session_id)
     return {"status": "reset", "session_id": session_id}
