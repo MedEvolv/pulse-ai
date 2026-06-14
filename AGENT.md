@@ -334,8 +334,9 @@ It must not claim:
 
 ### 6.3 Model
 
-- Claude Sonnet 4.6 via the Anthropic API directly (Emergent removed, ADR-0006);
-  the direct-Anthropic synthesis path is a tracked follow-up, deterministic until wired;
+- Vertex AI Gemini (`gemini-2.5-flash`) via the `google-genai` SDK behind the
+  `briefing._complete()` seam (ADR-0007; Emergent removed, ADR-0006); deterministic
+  until an `LLM_API_KEY` (Vertex express key) is set;
 - model usage off by default;
 - deterministic response always available;
 - explicit model request required;
@@ -1839,8 +1840,8 @@ Reproducibility (resolved 2026-06-13, Track A):
   guard are committed.
 - `emergentintegrations` has been **removed** (ADR-0006), so the old "re-comment
   the pin before redeploying" hazard no longer applies. The model path is decoupled
-  behind a neutral `_complete()` seam in `briefing.py`; its direct-Anthropic
-  implementation is a tracked follow-up. NOTE: the Emergent integration must be
+  behind a neutral `_complete()` seam in `briefing.py`; it now uses Vertex AI
+  Gemini (ADR-0007), enabled by setting `LLM_API_KEY`. NOTE: the Emergent integration must be
   disconnected on the Emergent platform itself so its auto-commit bot stops pushing
   to `main` — deleting `.emergent/` in-repo does not do that. Until disconnected,
   keep reading the bot's diffs (§32, above).

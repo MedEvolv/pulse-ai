@@ -11,9 +11,9 @@ simulator, and an honest offline evaluation harness.
 ## Tech stack
 - **Backend:** FastAPI + Motor (MongoDB), Python.
 - **Frontend:** React (CRA) + Tailwind CSS, React Router.
-- **Model:** Claude Sonnet 4.6 via the Anthropic API (direct) — **off by default**, explicit and
+- **Model:** Vertex AI Gemini (`gemini-2.5-flash`) — **off by default**, explicit and
   budget-limited. The product is fully usable without any model. (Emergent removed — ADR-0006;
-  the direct-Anthropic path is a tracked follow-up, deterministic until wired.)
+  provider chosen in ADR-0007; deterministic until `LLM_API_KEY` is set.)
 
 ## Project layout
 ```

@@ -18,10 +18,9 @@ AFK agents against the recorded ADRs), not regenerated. Concretely:
 
 - `emergentintegrations` is removed from the dependencies and the code.
 - The brief model-synthesis path is decoupled from Emergent behind a neutral
-  `_complete()` seam in `briefing.py`. Its direct **Anthropic** implementation
-  (`claude-sonnet-4-6`) is a tracked follow-up; until wired, model mode returns
-  `MODEL_PROVIDER_UNCONFIGURED` and the deterministic brief is served (model mode
-  is off by default, so runtime behaviour is unchanged).
+  `_complete()` seam in `briefing.py`. The provider chosen is **Vertex AI Gemini**
+  (ADR-0007); model mode is off by default, so runtime behaviour is unchanged
+  until an `LLM_API_KEY` is set.
 - The `EMERGENT_LLM_KEY` env var is renamed to the provider-neutral `LLM_API_KEY`.
 - The in-repo `.emergent/` marker is deleted.
 
@@ -31,14 +30,14 @@ The codebase is now architecture-led (recorded decisions, a real test surface, a
 repository seam). A generative regenerator that rewrites from its own model is
 incompatible with that — it would clobber the seam, reintroduce Mongo +
 `emergentintegrations`, and break the Vercel build. The only thing Emergent
-uniquely provided was the model call, and that is Claude — reachable directly via
-the Anthropic API with no proprietary wrapper.
+uniquely provided was the model call — a plain LLM call reachable directly via a
+provider API with no proprietary wrapper (provider chosen in ADR-0007).
 
 ## Consequences
 
 - The "re-comment `emergentintegrations` before redeploying" hazard is gone.
-- Reviving AI synthesis requires wiring the Anthropic SDK + an `LLM_API_KEY`
-  (tracked separately); the demo stays deterministic until then.
+- Reviving AI synthesis requires wiring an LLM SDK + an `LLM_API_KEY` (done in
+  ADR-0007: Vertex AI Gemini); the demo stays deterministic until a key is set.
 - **Platform action (not in this repo):** the Emergent integration must be
   disconnected on the Emergent side so its bot stops pushing to `main`. Deleting
   `.emergent/` here does not do that.

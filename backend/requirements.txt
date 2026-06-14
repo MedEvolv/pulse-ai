@@ -3,6 +3,7 @@ uvicorn==0.34.0
 python-dotenv==1.0.1
 motor==3.6.0
 pydantic==2.10.4
-# Emergent removed (ADR-0006). Model-mode brief synthesis will use the Anthropic
-# SDK directly (add `anthropic` here when that path is wired); the app runs
-# deterministic-only until then. No emergentintegrations dependency.
+# Model-mode brief synthesis uses Vertex AI Gemini (ADR-0007; Emergent removed,
+# ADR-0006). Imported lazily — the deterministic path needs none of it. Model
+# mode is off by default; set LLM_API_KEY (Vertex express key) to enable.
+google-genai==1.47.0

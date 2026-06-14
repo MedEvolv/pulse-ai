@@ -20,9 +20,13 @@ from brief_validation import validate_brief_output
 load_dotenv()
 
 PROMPT_VERSION = "brief-2.0.0"
-# Provider-neutral LLM key (Emergent removed — ADR-0006). When the direct
-# Anthropic synthesis path is wired, set LLM_API_KEY to an Anthropic API key.
+# LLM config. Model synthesis uses Vertex AI Gemini (ADR-0007). LLM_API_KEY is a
+# Vertex express-mode API key (the primary path); alternatively, service-account /
+# ADC auth is used when GOOGLE_CLOUD_PROJECT is set instead. Emergent removed (ADR-0006).
 LLM_API_KEY = os.environ.get("LLM_API_KEY")
+LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-2.5-flash")
+GCP_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT")
+GCP_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 SUPPORTED_QUESTIONS = [
     "Why is North Region underperforming?",
@@ -237,15 +241,43 @@ def deterministic_brief(facts: dict, mode: str = "deterministic",
 # ---------------------------------------------------------------------------
 # Model synthesis (explicit, validated)
 # ---------------------------------------------------------------------------
-async def _complete(system_message: str, user_text: str, max_tokens: int) -> str:
-    """Direct LLM completion seam. Emergent removed (ADR-0006).
+def _genai_client():
+    """Build a Vertex AI Gemini client (ADR-0007).
 
-    The direct Anthropic implementation (claude-sonnet-4-6 via the `anthropic`
-    SDK, keyed by LLM_API_KEY) is a tracked follow-up. Until it is wired and
-    verified against a real key, this raises NotImplementedError, which
-    `synthesize` maps to MODEL_PROVIDER_UNCONFIGURED -> deterministic brief.
+    Express mode (LLM_API_KEY) is the primary path: a single key, no project/ADC.
+    Falls back to service-account / ADC auth when GOOGLE_CLOUD_PROJECT is set.
+    The SDK is imported lazily so the deterministic path needs no LLM dependency.
     """
-    raise NotImplementedError("Direct Anthropic brief synthesis not wired yet")
+    from google import genai  # google-genai SDK
+    if LLM_API_KEY:
+        return genai.Client(vertexai=True, api_key=LLM_API_KEY)
+    if GCP_PROJECT:
+        return genai.Client(vertexai=True, project=GCP_PROJECT, location=GCP_LOCATION)
+    raise NotImplementedError(
+        "No Vertex credentials: set LLM_API_KEY (express key) or GOOGLE_CLOUD_PROJECT (ADC).")
+
+
+async def _complete(system_message: str, user_text: str, max_tokens: int) -> str:
+    """Single-shot completion via Vertex AI Gemini (ADR-0007).
+
+    Returns the model's raw text; `synthesize` strips fences, parses JSON, and
+    runs it through the strict validator. Requests JSON directly to reduce
+    formatting noise. Untested against a live Vertex key here — verified by the
+    enablement step in the linked issue.
+    """
+    from google.genai import types
+    client = _genai_client()
+    resp = await client.aio.models.generate_content(
+        model=LLM_MODEL,
+        contents=user_text,
+        config=types.GenerateContentConfig(
+            system_instruction=system_message,
+            max_output_tokens=max_tokens,
+            temperature=0.2,
+            response_mime_type="application/json",
+        ),
+    )
+    return resp.text or ""
 
 
 async def synthesize(facts: dict, question: str, role: str,
