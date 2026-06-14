@@ -11,8 +11,9 @@ simulator, and an honest offline evaluation harness.
 ## Tech stack
 - **Backend:** FastAPI + Motor (MongoDB), Python.
 - **Frontend:** React (CRA) + Tailwind CSS, React Router.
-- **Model:** Claude Sonnet 4.6 via Emergent integrations — **off by default**, explicit and
-  budget-limited. The product is fully usable without any model.
+- **Model:** Vertex AI Gemini (`gemini-2.5-flash`) — **off by default**, explicit and
+  budget-limited. The product is fully usable without any model. (Emergent removed — ADR-0006;
+  provider chosen in ADR-0007; deterministic until `LLM_API_KEY` is set.)
 
 ## Project layout
 ```
@@ -29,10 +30,11 @@ frontend/src/
 ```
 
 ## Run locally
-This repo is designed for the Emergent platform (supervisor-managed services). Locally:
+The app is self-contained — it runs on the in-memory adapter with no external services
+(set `MONGO_URL` only if you want durable Mongo-backed state). Locally:
 
 ```bash
-# Mongo must be running on $MONGO_URL
+# Optional: set MONGO_URL for durable state; omit to use the in-memory adapter
 # Backend
 cd backend
 pip install -r requirements.txt

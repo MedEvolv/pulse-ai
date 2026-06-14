@@ -20,7 +20,13 @@ from brief_validation import validate_brief_output
 load_dotenv()
 
 PROMPT_VERSION = "brief-2.0.0"
-EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY")
+# LLM config. Model synthesis uses Vertex AI Gemini (ADR-0007). LLM_API_KEY is a
+# Vertex express-mode API key (the primary path); alternatively, service-account /
+# ADC auth is used when GOOGLE_CLOUD_PROJECT is set instead. Emergent removed (ADR-0006).
+LLM_API_KEY = os.environ.get("LLM_API_KEY")
+LLM_MODEL = os.environ.get("LLM_MODEL", "gemini-2.5-flash")
+GCP_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT")
+GCP_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 SUPPORTED_QUESTIONS = [
     "Why is North Region underperforming?",
@@ -235,13 +241,52 @@ def deterministic_brief(facts: dict, mode: str = "deterministic",
 # ---------------------------------------------------------------------------
 # Model synthesis (explicit, validated)
 # ---------------------------------------------------------------------------
+def _genai_client():
+    """Build a Vertex AI Gemini client (ADR-0007).
+
+    Express mode (LLM_API_KEY) is the primary path: a single key, no project/ADC.
+    Falls back to service-account / ADC auth when GOOGLE_CLOUD_PROJECT is set.
+    The SDK is imported lazily so the deterministic path needs no LLM dependency.
+    """
+    from google import genai  # google-genai SDK
+    if LLM_API_KEY:
+        return genai.Client(vertexai=True, api_key=LLM_API_KEY)
+    if GCP_PROJECT:
+        return genai.Client(vertexai=True, project=GCP_PROJECT, location=GCP_LOCATION)
+    raise NotImplementedError(
+        "No Vertex credentials: set LLM_API_KEY (express key) or GOOGLE_CLOUD_PROJECT (ADC).")
+
+
+async def _complete(system_message: str, user_text: str, max_tokens: int) -> str:
+    """Single-shot completion via Vertex AI Gemini (ADR-0007).
+
+    Returns the model's raw text; `synthesize` strips fences, parses JSON, and
+    runs it through the strict validator. Requests JSON directly to reduce
+    formatting noise. Untested against a live Vertex key here — verified by the
+    enablement step in the linked issue.
+    """
+    from google.genai import types
+    client = _genai_client()
+    resp = await client.aio.models.generate_content(
+        model=LLM_MODEL,
+        contents=user_text,
+        config=types.GenerateContentConfig(
+            system_instruction=system_message,
+            max_output_tokens=max_tokens,
+            temperature=0.2,
+            response_mime_type="application/json",
+        ),
+    )
+    return resp.text or ""
+
+
 async def synthesize(facts: dict, question: str, role: str,
                      max_tokens: int = 700, timeout: int = 12):
     """Call the model, validate strictly. Returns (brief_dict, reason_code|None)."""
     det = deterministic_brief(facts)
     if det["insufficient_evidence"]:
         return det, "INSUFFICIENT_EVIDENCE"
-    if not EMERGENT_LLM_KEY:
+    if not LLM_API_KEY:
         return deterministic_brief(facts, "deterministic_fallback", "MODEL_DISABLED"), "MODEL_DISABLED"
 
     allowed_metric_ids, allowed_evidence_ids = allowlists(facts)
@@ -262,22 +307,18 @@ async def synthesize(facts: dict, question: str, role: str,
         "deterministic_confidence_ceiling": ceiling,
     }
 
+    user_text = (
+        f"Question: {question or SUPPORTED_QUESTIONS[0]}\nRole: {role}\n\n"
+        f"FACTS (authoritative; cite only the allowlisted IDs; no numbers in prose):\n"
+        f"{json.dumps(slim, default=str)}\n\nProduce the brief now as compact pure JSON."
+    )
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = (
-            LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"brief-{facts['region']['region_id']}",
-                    system_message=SYSTEM_MESSAGE)
-            .with_model("anthropic", "claude-sonnet-4-6")
-            .with_params(max_tokens=max_tokens)
-        )
-        user = UserMessage(text=(
-            f"Question: {question or SUPPORTED_QUESTIONS[0]}\nRole: {role}\n\n"
-            f"FACTS (authoritative; cite only the allowlisted IDs; no numbers in prose):\n"
-            f"{json.dumps(slim, default=str)}\n\nProduce the brief now as compact pure JSON."
-        ))
-        raw = await asyncio.wait_for(chat.send_message(user), timeout=timeout)
+        raw = await asyncio.wait_for(
+            _complete(SYSTEM_MESSAGE, user_text, max_tokens=max_tokens), timeout=timeout)
     except asyncio.TimeoutError:
         return deterministic_brief(facts, "deterministic_fallback", "MODEL_TIMEOUT"), "MODEL_TIMEOUT"
+    except NotImplementedError:
+        return deterministic_brief(facts, "deterministic_fallback", "MODEL_PROVIDER_UNCONFIGURED"), "MODEL_PROVIDER_UNCONFIGURED"
     except Exception:
         return deterministic_brief(facts, "deterministic_fallback", "MODEL_PROVIDER_ERROR"), "MODEL_PROVIDER_ERROR"
 

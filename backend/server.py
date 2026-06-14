@@ -279,7 +279,7 @@ async def health():
             "prompt_version": briefing.PROMPT_VERSION, "eval_version": evaluation.EVAL_VERSION,
             "period": engine.PERIOD,
             "model_enabled": model_budget.config()["enabled"],
-            "model_key_present": bool(briefing.EMERGENT_LLM_KEY)}
+            "model_key_present": bool(briefing.LLM_API_KEY)}
 
 
 @app.get("/api/meta")
