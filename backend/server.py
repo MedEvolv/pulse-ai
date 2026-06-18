@@ -21,6 +21,9 @@ import evaluation
 import model_budget
 import repository
 import sectors
+from engine import cycle_compute, intervention_state
+from engine.closure_event import ClosureEvent, precedence_from_relationship, resolve_precedence
+from pkm.closure_event_spine import build_closure_event_spine
 
 load_dotenv()
 
@@ -109,6 +112,10 @@ else:
 
 # The mutable-fabric seam (ADR-0002): interventions + closure proofs.
 repo = repository.build_repository()
+
+# The append-only closure event spine (ADR-0003): institutional-memory source of
+# truth. A separate seam from the repository — append-only, never mutated.
+closure_spine = build_closure_event_spine()
 
 app = FastAPI(title="Pulse AI")
 
@@ -233,6 +240,24 @@ class VerifyRequest(BaseModel):
     decision: Literal["approved", "rejected"]
     verified_by: Optional[str] = Field(default=None, max_length=80)
     note: Optional[str] = Field(default=None, max_length=500)
+
+
+class CloseRequest(BaseModel):
+    """Typed closure (deepening #2): cites an OpportunityGroup, names the actor,
+    and carries the sector/company positions for the doctrine-Q4 resolution."""
+    opportunity_group_ref: str = Field(max_length=80)   # REQUIRED — no orphan closures
+    named_actor: str = Field(max_length=120)
+    region: str = "REG-NORTH"
+    sector: str = "healthcare"
+    evidence_ids: List[str] = Field(default_factory=list, max_length=10)
+    consecutive_days: int = Field(default=0, ge=0, le=365)
+    note: Optional[str] = Field(default=None, max_length=500)
+    # Doctrine Q4: what sector governance vs company knowledge each recommend.
+    sector_position: str = Field(default="close", max_length=80)
+    company_position: str = Field(default="close", max_length=80)
+    # Named-actor override is the ONLY way precedence flips off the default.
+    override_actor: Optional[str] = Field(default=None, max_length=120)
+    override_reason: Optional[str] = Field(default=None, max_length=300)
 
 
 # ----------------------------------------------------------------------------
@@ -807,6 +832,79 @@ async def verify_closure(intervention_id: str, req: VerifyRequest, session_id: s
         update["proof_id"] = None
     await repo.save(session_id, intervention_id, update)
     return _clean(await _get_intervention(intervention_id, session_id))
+
+
+@app.post("/api/interventions/{intervention_id}/close")
+async def close_intervention(intervention_id: str, req: CloseRequest,
+                             session_id: str = Depends(get_session)):
+    """Typed closure (deepening #2; ADR-0003/0004).
+
+    Validates the closure transition via the typed state machine, resolves the
+    REQUIRED opportunity_group_ref to a real OpportunityGroup (no orphans),
+    applies the doctrine-Q4 sector/company precedence rule, and records an
+    immutable ClosureEvent on the append-only spine.
+    """
+    doc = await _get_intervention(intervention_id, session_id)
+
+    # 1. Typed transition: the substrate status must sit in the closure sub-path
+    #    and be allowed to advance to closure_claimed.
+    src = intervention_state.FROM_SUBSTRATE.get(doc["status"])
+    if src is None:
+        raise HTTPException(409, f"Status '{doc['status']}' is not in the closure sub-path.")
+    try:
+        intervention_state.validate_transition(src, intervention_state.ClosureState.CLOSURE_CLAIMED)
+    except intervention_state.InvalidTransition as e:
+        raise HTTPException(409, str(e))
+
+    # 2. Resolve the cited OpportunityGroup (no orphan closures).
+    if req.region not in REGION_IDS:
+        raise HTTPException(422, f"unknown region '{req.region}'")
+    groups = cycle_compute.region_groups(req.region, req.sector)
+    matched = next((g for g in groups if g.opportunity_group_id == req.opportunity_group_ref), None)
+    if matched is None:
+        raise HTTPException(422, f"opportunity_group_ref '{req.opportunity_group_ref}' "
+                                 f"does not resolve to an OpportunityGroup in {req.region}.")
+
+    # 3. Typed claim, naming the cycle stage and the named actor.
+    claim = intervention_state.ClosureClaim(
+        stage=matched.stage, named_actor=req.named_actor, evidence_ids=req.evidence_ids,
+        consecutive_days=req.consecutive_days, note=req.note,
+    )
+
+    # 4. Doctrine Q4: default precedence from the cited group's relationship;
+    #    sector wins on conflict unless a named actor overrides.
+    default = precedence_from_relationship(matched.opportunity_relationship)
+    res = resolve_precedence(req.sector_position, req.company_position, default,
+                             override_actor=req.override_actor, override_reason=req.override_reason)
+
+    # 5. Immutable ClosureEvent on the append-only spine.
+    event = ClosureEvent(
+        closure_id=f"CL-{intervention_id}-{_now_iso()}",
+        intervention_id=intervention_id,
+        opportunity_group_ref=req.opportunity_group_ref,
+        claim=claim.model_dump(),
+        proof=None,
+        precedence_source=res["precedence_source"],
+        overridden_by=res["overridden_by"],
+        override_reason=res["override_reason"],
+        timestamp=_now_iso(),
+        audit_trail=res["audit_trail"],
+    )
+    event_id = closure_spine.append(event)
+
+    # 6. Advance the substrate status (the spine, not the status flag, is the
+    #    source of truth — the status is a projection).
+    history = doc.get("history", [])
+    history.append({"at": _now_iso(), "event": "closure_event_recorded", "status": "Closure Claimed",
+                    "closure_event_id": event_id, "precedence_source": res["precedence_source"]})
+    await repo.save(session_id, intervention_id, {"status": "Closure Claimed", "history": history})
+
+    return {
+        "intervention": _clean(await _get_intervention(intervention_id, session_id)),
+        "closure_event": event.model_dump(),
+        "event_id": event_id,
+        "conflict": res["conflict"],
+    }
 
 
 # ----------------------------------------------------------------------------
