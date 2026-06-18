@@ -92,3 +92,24 @@ def cycle_stages_for(sector: str = "healthcare") -> list:
     stages = sector_governance.CYCLE_STAGES
     return [{"stage": s, "label": (profile.stage_label(s) if profile else s.title())}
             for s in stages]
+
+
+# --- deepening #4: typed LTV:CAC + binding constraint + Critical Few over the pools ---
+def regional_ltv_cac(region: str, sector: str = "healthcare"):
+    """Typed LtvCacComputation for a region/sector (the flywheel metric)."""
+    from engine import ltv_cac
+    profile = sector_governance.load_sector(sector)
+    groups = [g for g in region_groups(region, sector)]
+    return ltv_cac.compute_ltv_cac(groups, profile, region=region)
+
+
+def regional_binding_constraint(region: str, sector: str = "healthcare"):
+    """Typed BindingConstraint (Goldratt) for the AI narrative to cite."""
+    from engine import binding_constraint
+    return binding_constraint.find_constraint(region_groups(region, sector))
+
+
+def regional_critical_few(region: str, sector: str = "healthcare"):
+    """Typed Critical Few (Pareto) over the region's shared pools."""
+    from engine import critical_few
+    return critical_few.identify_critical_few(region_groups(region, sector))

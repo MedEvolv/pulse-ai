@@ -479,6 +479,30 @@ async def narrative(req: NarrativeRequest, session_id: str = Depends(get_session
     }
 
 
+@app.get("/api/ltv_cac")
+async def ltv_cac_view(sector: str = "healthcare", region: str = "REG-NORTH"):
+    """Typed flywheel metric (deepening #4; ADR-0002).
+
+    Returns the computed LtvCacComputation (company ratio + band + per-stage/
+    cohort/location/intervention decomposition), the Goldratt BindingConstraint,
+    and the Pareto Critical Few — proving the band is COMPUTED, not guessed.
+    """
+    if region not in REGION_IDS:
+        raise HTTPException(422, "unknown region")
+    if sectors.get_profile(sector) is None:
+        raise HTTPException(422, f"unknown sector '{sector}'")
+    comp = cycle_compute.regional_ltv_cac(region, sector)
+    bc = cycle_compute.regional_binding_constraint(region, sector)
+    cf = cycle_compute.regional_critical_few(region, sector)
+    return {
+        "sector": sector,
+        "region": region,
+        "ltv_cac": comp.model_dump(),
+        "binding_constraint": bc.model_dump() if bc else None,
+        "critical_few": cf.model_dump(),
+    }
+
+
 # ----------------------------------------------------------------------------
 # Brief (CP-04 gated; deterministic default)
 # ----------------------------------------------------------------------------
