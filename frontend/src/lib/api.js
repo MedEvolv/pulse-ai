@@ -35,6 +35,8 @@ client.interceptors.response.use(
 );
 
 export const getMeta = () => client.get("/meta").then((r) => r.data);
+export const getSectors = () => client.get("/sectors").then((r) => r.data);
+export const getSector = (id) => client.get(`/sector/${id}`).then((r) => r.data);
 export const getCockpit = (region) => client.get("/cockpit", { params: { region } }).then((r) => r.data);
 export const getOpportunity = (region) => client.get("/opportunity", { params: { region } }).then((r) => r.data);
 export const postBrief = (body) => client.post("/brief", body).then((r) => r.data);
