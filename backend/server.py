@@ -23,6 +23,7 @@ import repository
 import sectors
 from engine import ai_evidence, cycle_compute, intervention_state
 from engine.closure_event import ClosureEvent, precedence_from_relationship, resolve_precedence
+from pkm import operator_query_library, query_dispatch
 from pkm.closure_event_spine import build_closure_event_spine
 
 load_dotenv()
@@ -477,6 +478,37 @@ async def narrative(req: NarrativeRequest, session_id: str = Depends(get_session
         "model_enabled": model_budget.config()["enabled"],
         "generated_at": _now_iso(),
     }
+
+
+@app.get("/api/operator_query/library")
+async def operator_query_library_view(sector: str = "healthcare"):
+    """The pre-canned 'Ask [Company]:' library for a sector (~30 questions)."""
+    if sectors.get_profile(sector) is None:
+        raise HTTPException(422, f"unknown sector '{sector}'")
+    qs = operator_query_library.questions_for_sector(sector)
+    return {"sector": sector, "count": len(qs), "questions": [q.model_dump() for q in qs]}
+
+
+class OperatorQueryRequest(BaseModel):
+    query_id: str = Field(max_length=80)   # pre-canned only in v1.0 — no free text
+    region: str = "REG-NORTH"
+
+
+@app.post("/api/operator_query")
+async def operator_query(req: OperatorQueryRequest, session_id: str = Depends(get_session)):
+    """Run a pre-canned operator query through the 3-adapter dispatch (#5).
+
+    Qdrant retrieval (closure events) -> engine computation (#4) -> AINarrative
+    wrap (#3). v1.0 accepts a pre-canned query_id only; the typed answer cites
+    real OpportunityGroup + ClosureEvent ids across the 3 knowledge layers.
+    """
+    if req.region not in REGION_IDS:
+        raise HTTPException(422, "unknown region")
+    q = operator_query_library.get_question(req.query_id)
+    if q is None:
+        raise HTTPException(404, f"Unknown pre-canned query '{req.query_id}'. Free-text is not supported in v1.0.")
+    await ensure_session_seed(session_id)
+    return query_dispatch.dispatch(q, req.region, closure_spine, _now_iso())
 
 
 @app.get("/api/ltv_cac")
