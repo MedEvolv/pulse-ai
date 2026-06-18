@@ -2,12 +2,14 @@ import React, { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, GitBranch, Droplets, SlidersHorizontal,
-  Database, ShieldCheck, Activity, Bug, X, ChevronDown, RotateCcw,
+  Database, ShieldCheck, Activity, Bug, X, ChevronDown, RotateCcw, RefreshCw,
 } from "lucide-react";
 import { useFilters } from "../context/FilterContext";
+import SectorToggle from "./SectorToggle";
 import { resetSession, SESSION_ID } from "../lib/api";
 
 const NAV = [
+  { to: "/flywheel", label: "Flywheel", icon: RefreshCw, testid: "nav-flywheel" },
   { to: "/cockpit", label: "Cockpit", icon: LayoutDashboard, testid: "nav-cockpit" },
   { to: "/journeys", label: "Journeys", icon: GitBranch, testid: "nav-journeys" },
   { to: "/leakages", label: "Leakages", icon: Droplets, testid: "nav-leakages" },
@@ -112,6 +114,7 @@ export default function Layout({ children }) {
               <span className="w-1.5 h-1.5 rounded-full bg-watch" /> Synthetic Demo Data
             </span>
             <span className="hidden md:inline text-[11px] text-muted">Last 30 days</span>
+            <SectorToggle />
             <RegionSelect />
             <button
               onClick={() => setDebug(true)}
@@ -170,10 +173,15 @@ export default function Layout({ children }) {
           ))}
         </nav>
 
-        <main className="flex-1 min-w-0 overflow-x-hidden pb-20 lg:pb-6">
-          <div key={loc.pathname} className="fade-up max-w-[1280px] mx-auto px-4 py-4">
+        <main className="flex-1 min-w-0 overflow-x-hidden pb-20 lg:pb-6 flex flex-col">
+          <div key={loc.pathname} className="fade-up max-w-[1280px] mx-auto w-full px-4 py-4 flex-1">
             {children}
           </div>
+          <footer className="max-w-[1280px] mx-auto w-full px-4 py-3 mt-2 border-t border-line">
+            <p className="text-[10px] text-muted" data-testid="archlife-footer">
+              A product of ArchLife · pulse-ai.archlife.in
+            </p>
+          </footer>
         </main>
       </div>
 
