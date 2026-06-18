@@ -7,7 +7,8 @@ weakest stage, LTV:CAC bands resolve, and determinism holds across calls.
 import sectors
 
 SECTORS = ["healthcare", "retail", "saas", "automotive", "hospitality", "financial_services"]
-FULL = {"healthcare", "retail", "saas"}
+# v1.0 Friday lift: all 6 sectors are full-depth (the 3-stub split was closed pre-pitch).
+FULL = set(SECTORS)
 
 
 def test_six_profiles_load():
