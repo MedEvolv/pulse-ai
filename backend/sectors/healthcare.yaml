@@ -1,0 +1,66 @@
+sector: healthcare
+display_name: Healthcare
+depth: full
+reference: Multi-location dental network (synthetic, Kamla-Nagar-shaped)
+default: true
+
+# Sector-shaped labels for the universal data shape (see CONTEXT.md glossary).
+# The engine is sector-blind; this dictionary translates universal terms -> sector words.
+labels:
+  location: Clinic
+  customer: Patient
+  operator: Clinic manager
+  region: Region
+  cohort: Patient cohort
+  intervention: Recall intervention
+
+# The headline number (LTV:CAC band, ADR — flywheel doctrine).
+headline:
+  ltv_cac: 2.8
+  band: [2.0, 3.0]            # in-band: 2.0 baseline -> 3.0 target
+  binding_constraint: retention   # one of the 5 universal cycle stages
+
+# The 5 universal cycle stages (Spend -> Revenue -> Retention -> Expansion -> Referral),
+# named for this sector. One computation per stage; this is the naming overlay only.
+stage_labels:
+  spend: Acquisition
+  revenue: Treatment
+  retention: Recall
+  expansion: Case expansion
+  referral: Patient referral
+
+# --- Sector governance profile (4 sub-layers) ---
+rulesets:
+  - "No clinical notes in the AI narrative (HIPAA minimum-necessary)"
+  - "No raw PII in the intelligence layer (DPDP + HIPAA; pseudonymize only)"
+  - "No diagnosis and no clinical recommendations — the AI narrates, it does not prescribe"
+  - "Closure proof must carry a named clinic-manager sign-off"
+
+protocols:
+  data_sources:
+    - name: PRM (Patient Relationship Management)
+      format: csv_export
+      cadence: weekly
+    - name: Telephony attempts
+      format: csv_export
+      cadence: weekly
+    - name: Appointment records
+      format: csv_export
+      cadence: weekly
+    - name: Complaint records
+      format: csv_export
+      cadence: weekly
+  forbidden_sources:
+    - "Live EMR (phase-two; v1 is batch only)"
+    - "Live insurance claims (phase-two; v1 is batch only)"
+
+policies:
+  closure_proof: Named clinic-manager sign-off + patient-contact evidence (PRM log entry)
+  escalation: clinic manager -> regional head -> CMO
+  ai_disclosure: "AI-generated. Reviewed by [clinic manager] before action."
+
+cadences:
+  recall: 6-month cleaning, 1-year follow-up
+  lapse_threshold_days: 270
+  reactivation: clinic-routed call (30d) + clinic-routed SMS (60d)
+  reactivation_owner: Clinic manager

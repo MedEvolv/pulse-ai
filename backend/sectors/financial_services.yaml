@@ -1,0 +1,47 @@
+sector: financial_services
+display_name: Financial Services
+depth: stub
+reference: Private-banking book (synthetic, Lending-Club-shaped)
+
+labels:
+  location: Branch
+  customer: Client
+  operator: Relationship Manager
+  region: Region
+  cohort: Client segment
+  intervention: Annual-review intervention
+
+headline:
+  ltv_cac: 5.0
+  band: [3.5, 5.0]
+  binding_constraint: retention
+
+stage_labels:
+  spend: Acquisition
+  revenue: Onboarding
+  retention: Relationship retention
+  expansion: Wallet expansion
+  referral: Client referral
+
+rulesets:
+  - "KYC + lending disclosure + Reg Z + DPDP; no raw KYC data, no card data, no trading activity in the narrative"
+  - "Closure proof must carry a named RM sign-off"
+
+protocols:
+  data_sources:
+    - name: Core banking
+      format: csv_export
+      cadence: weekly
+    - name: Annual review log
+      format: csv_export
+      cadence: monthly
+
+policies:
+  closure_proof: Review meeting + next steps
+  escalation: RM -> branch manager -> regional director
+
+cadences:
+  recall: 12-month annual review
+  lapse_threshold_days: 365
+  reactivation: RM-routed call (14d) + RM-routed email (30d)
+  reactivation_owner: Relationship Manager

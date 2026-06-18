@@ -1,0 +1,57 @@
+sector: retail
+display_name: Retail
+depth: full
+reference: Multi-store flagship retailer (synthetic, UCI Online Retail II-shaped)
+
+labels:
+  location: Store
+  customer: Customer
+  operator: Store manager
+  region: Region
+  cohort: Customer segment
+  intervention: Win-back intervention
+
+headline:
+  ltv_cac: 3.2
+  band: [2.5, 3.5]
+  binding_constraint: expansion
+
+stage_labels:
+  spend: Acquisition
+  revenue: First purchase
+  retention: Repeat purchase
+  expansion: Upgrade / cross-sell
+  referral: Customer referral
+
+rulesets:
+  - "PCI-DSS-style payment isolation — no card numbers, CVV, or cardholder names in the intelligence layer"
+  - "No raw PII in the AI narrative (pseudonymize only)"
+  - "Closure proof must carry a named store-manager sign-off"
+
+protocols:
+  data_sources:
+    - name: POS transactions
+      format: csv_export
+      cadence: daily
+    - name: E-commerce orders
+      format: csv_export
+      cadence: daily
+    - name: Loyalty program
+      format: csv_export
+      cadence: weekly
+    - name: Campaign attribution
+      format: csv_export
+      cadence: weekly
+  forbidden_sources:
+    - "Raw payment card data (out of scope, permanently)"
+
+policies:
+  closure_proof: Campaign attribution + visit log
+  escalation: store manager -> regional manager -> CMO
+  ai_disclosure: "AI-generated. Reviewed by [store manager] before action."
+
+cadences:
+  recall: Seasonal (festive + summer)
+  lapse_threshold_days: 180
+  reactivation: store-routed email (30d) + store-routed SMS (60d)
+  reactivation_owner: Store manager

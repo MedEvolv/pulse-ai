@@ -1,0 +1,48 @@
+sector: automotive
+display_name: Automotive & Mobility
+depth: stub
+reference: Metro dealership network (synthetic, CarDekho-shaped)
+
+labels:
+  location: Dealership
+  customer: Owner
+  operator: Dealership GM
+  region: Zone
+  cohort: Owner segment
+  intervention: Service-recall intervention
+
+headline:
+  ltv_cac: 4.0
+  band: [3.0, 4.0]
+  binding_constraint: spend
+
+stage_labels:
+  spend: Acquisition
+  revenue: Vehicle sale
+  retention: Service retention
+  expansion: Upgrade / trade-in
+  referral: Owner referral
+
+# Stub depth: governance is present in shape, lighter in detail (ADR-0005).
+rulesets:
+  - "OEM warranty + service-disclosure rules; no recall bypass, no warranty-fraud indicators"
+  - "Closure proof must carry a named service-manager sign-off"
+
+protocols:
+  data_sources:
+    - name: Dealer CRM
+      format: csv_export
+      cadence: weekly
+    - name: Service tickets
+      format: csv_export
+      cadence: weekly
+
+policies:
+  closure_proof: Service ticket + owner follow-up
+  escalation: service advisor -> service manager -> GM -> OEM regional
+
+cadences:
+  recall: 6-month service, 18-month upgrade
+  lapse_threshold_days: 270
+  reactivation: dealer-routed call (30d) + dealer-routed email (60d)
+  reactivation_owner: Dealership GM

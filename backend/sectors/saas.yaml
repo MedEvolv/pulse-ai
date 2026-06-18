@@ -1,0 +1,57 @@
+sector: saas
+display_name: SaaS
+depth: full
+reference: Mid-market B2B SaaS (synthetic, IBM Telco-churn-shaped)
+
+labels:
+  location: Account
+  customer: User
+  operator: Customer Success Manager
+  region: Territory
+  cohort: Account segment
+  intervention: Re-engagement play
+
+headline:
+  ltv_cac: 3.5
+  band: [2.5, 3.5]
+  binding_constraint: referral
+
+stage_labels:
+  spend: Acquisition
+  revenue: Activation
+  retention: Renewal
+  expansion: Seat expansion
+  referral: Account referral
+
+rulesets:
+  - "GDPR + SOC2 — no raw PII, no payment card data, no third-party tracking in the narrative"
+  - "Consent and data-export rights respected; pseudonymize before the intelligence layer"
+  - "Closure proof must carry a named CSM sign-off"
+
+protocols:
+  data_sources:
+    - name: CRM
+      format: csv_export
+      cadence: daily
+    - name: Billing
+      format: csv_export
+      cadence: daily
+    - name: In-app telemetry
+      format: csv_export
+      cadence: daily
+    - name: Support tickets
+      format: csv_export
+      cadence: weekly
+  forbidden_sources:
+    - "Raw third-party tracking pixels (out of scope)"
+
+policies:
+  closure_proof: Login event + feature use
+  escalation: CSM -> VP Customer Success -> CEO
+  ai_disclosure: "AI-generated. Reviewed by [CSM] before action."
+
+cadences:
+  recall: 90-day in-app, 6-month CSM review
+  lapse_threshold_days: 90
+  reactivation: in-app prompt (7d) + CSM email (30d)
+  reactivation_owner: Customer Success Manager
