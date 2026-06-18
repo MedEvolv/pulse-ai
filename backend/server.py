@@ -20,6 +20,7 @@ import engine
 import evaluation
 import model_budget
 import repository
+import sectors
 
 load_dotenv()
 
@@ -262,7 +263,35 @@ async def meta():
         "prompt_version": briefing.PROMPT_VERSION,
         "supported_questions": briefing.SUPPORTED_QUESTIONS,
         "intervention_statuses": ALL_STATUSES,
+        "attribution": sectors.ATTRIBUTION,
+        "hosting": sectors.HOSTING,
     }
+
+
+# ----------------------------------------------------------------------------
+# Sector layer (RevOpsOS v1.0): one engine, six governance profiles.
+# The engine is sector-blind; each sector's YAML profile (backend/sectors/)
+# shapes the universal cycle. See backend/sectors.py + CONTEXT.md glossary.
+# ----------------------------------------------------------------------------
+@app.get("/api/sectors")
+async def list_sectors():
+    """The init-page toggle: 6 sectors with headline LTV:CAC + band."""
+    return {
+        "sectors": sectors.list_sectors(),
+        "default": sectors.default_sector(),
+        "attribution": sectors.ATTRIBUTION,
+        "hosting": sectors.HOSTING,
+    }
+
+
+@app.get("/api/sector/{sector_id}")
+async def get_sector(sector_id: str):
+    """One sector coerced to the canonical shape: flywheel (5 cycle stages),
+    LTV:CAC band, per-cohort + per-location drill, and the governance profile."""
+    data = sectors.coerce(sector_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sector: {sector_id}")
+    return data
 
 
 FORMULAS = {
