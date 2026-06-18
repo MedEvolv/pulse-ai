@@ -1,0 +1,59 @@
+sector: hospitality
+display_name: Hospitality
+depth: full
+reference: Multi-property resort group (synthetic, Hotel-Booking-Demand-shaped)
+
+labels:
+  location: Property
+  customer: Guest
+  operator: Property manager
+  region: Cluster
+  cohort: Guest segment
+  intervention: Post-stay re-engagement
+
+headline:
+  ltv_cac: 2.5
+  band: [2.0, 3.0]
+  binding_constraint: revenue
+
+stage_labels:
+  spend: Acquisition
+  revenue: Booking
+  retention: Re-booking
+  expansion: Upsell / package
+  referral: Guest referral
+
+rulesets:
+  - "Guest-stay confidentiality + payment-data isolation; no raw guest data or payment info in the narrative"
+  - "Loyalty-tier and upgrade eligibility are aggregate-only; no individual spend profiles in the AI output"
+  - "Repeat-guest history pseudonymized before the intelligence layer (GDPR + DPDP)"
+  - "Closure proof must carry a named property-manager sign-off"
+
+protocols:
+  data_sources:
+    - name: PMS (Property Management System)
+      format: csv_export
+      cadence: weekly
+    - name: Booking engine
+      format: csv_export
+      cadence: daily
+    - name: Loyalty program
+      format: csv_export
+      cadence: weekly
+    - name: Post-stay feedback
+      format: csv_export
+      cadence: weekly
+  forbidden_sources:
+    - "Live PMS (phase-two; v1 is batch only)"
+    - "Raw payment / card data (out of scope, permanently)"
+
+policies:
+  closure_proof: Booking record + post-stay feedback, with named property-manager sign-off
+  escalation: front-desk manager -> GM -> brand
+  ai_disclosure: "AI-generated. Reviewed by [property manager] before action."
+
+cadences:
+  recall: Seasonal (festive + summer), 90-day post-stay, 1-year anniversary
+  lapse_threshold_days: 365
+  reactivation: property-routed email (30d) + property-routed SMS (90d)
+  reactivation_owner: Property manager

@@ -1,0 +1,59 @@
+sector: financial_services
+display_name: Financial Services
+depth: full
+reference: Private-banking book (synthetic, Lending-Club-shaped)
+
+labels:
+  location: Branch
+  customer: Client
+  operator: Relationship Manager
+  region: Region
+  cohort: Client segment
+  intervention: Annual-review intervention
+
+headline:
+  ltv_cac: 5.0
+  band: [3.5, 5.0]
+  binding_constraint: retention
+
+stage_labels:
+  spend: Acquisition
+  revenue: Onboarding
+  retention: Relationship retention
+  expansion: Wallet expansion
+  referral: Client referral
+
+rulesets:
+  - "KYC + lending disclosure + Reg Z + DPDP; no raw KYC data, no card data, no trading activity in the narrative"
+  - "Suitability / Reg BI boundary: the AI surfaces review-due, it does not recommend products"
+  - "AML monitoring stays in the bank's perimeter; no transaction-level flags in the intelligence layer"
+  - "Closure proof must carry a named relationship-manager sign-off"
+
+protocols:
+  data_sources:
+    - name: CRM
+      format: csv_export
+      cadence: weekly
+    - name: Core banking batch
+      format: csv_export
+      cadence: weekly
+    - name: AUM / portfolio summary
+      format: csv_export
+      cadence: monthly
+    - name: KYC / annual-review log
+      format: csv_export
+      cadence: monthly
+  forbidden_sources:
+    - "Live trading / order activity (out of scope, permanently)"
+    - "Raw AUM holdings with client PII (aggregate-only in v1)"
+
+policies:
+  closure_proof: Review meeting + next steps, with named RM handoff and suitability sign-off
+  escalation: RM -> branch manager -> regional director
+  ai_disclosure: "AI-generated. Reviewed by [relationship manager] before action."
+
+cadences:
+  recall: 12-month annual review, tier-migration check, AUM-growth review
+  lapse_threshold_days: 365
+  reactivation: RM-routed call (14d) + RM-routed email (30d)
+  reactivation_owner: Relationship Manager

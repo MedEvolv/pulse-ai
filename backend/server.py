@@ -20,6 +20,11 @@ import engine
 import evaluation
 import model_budget
 import repository
+import sectors
+from engine import ai_evidence, cycle_compute, intervention_state
+from engine.closure_event import ClosureEvent, precedence_from_relationship, resolve_precedence
+from pkm import operator_query_library, query_dispatch
+from pkm.closure_event_spine import build_closure_event_spine
 
 load_dotenv()
 
@@ -108,6 +113,10 @@ else:
 
 # The mutable-fabric seam (ADR-0002): interventions + closure proofs.
 repo = repository.build_repository()
+
+# The append-only closure event spine (ADR-0003): institutional-memory source of
+# truth. A separate seam from the repository — append-only, never mutated.
+closure_spine = build_closure_event_spine()
 
 app = FastAPI(title="Pulse AI")
 
@@ -234,6 +243,24 @@ class VerifyRequest(BaseModel):
     note: Optional[str] = Field(default=None, max_length=500)
 
 
+class CloseRequest(BaseModel):
+    """Typed closure (deepening #2): cites an OpportunityGroup, names the actor,
+    and carries the sector/company positions for the doctrine-Q4 resolution."""
+    opportunity_group_ref: str = Field(max_length=80)   # REQUIRED — no orphan closures
+    named_actor: str = Field(max_length=120)
+    region: str = "REG-NORTH"
+    sector: str = "healthcare"
+    evidence_ids: List[str] = Field(default_factory=list, max_length=10)
+    consecutive_days: int = Field(default=0, ge=0, le=365)
+    note: Optional[str] = Field(default=None, max_length=500)
+    # Doctrine Q4: what sector governance vs company knowledge each recommend.
+    sector_position: str = Field(default="close", max_length=80)
+    company_position: str = Field(default="close", max_length=80)
+    # Named-actor override is the ONLY way precedence flips off the default.
+    override_actor: Optional[str] = Field(default=None, max_length=120)
+    override_reason: Optional[str] = Field(default=None, max_length=300)
+
+
 # ----------------------------------------------------------------------------
 # Meta / health
 # ----------------------------------------------------------------------------
@@ -262,7 +289,39 @@ async def meta():
         "prompt_version": briefing.PROMPT_VERSION,
         "supported_questions": briefing.SUPPORTED_QUESTIONS,
         "intervention_statuses": ALL_STATUSES,
+        "attribution": sectors.ATTRIBUTION,
+        "hosting": sectors.HOSTING,
     }
+
+
+# ----------------------------------------------------------------------------
+# Sector layer (RevOpsOS v1.0): one engine, six governance profiles.
+# The engine is sector-blind; each sector's YAML profile (backend/sectors/)
+# shapes the universal cycle. See backend/sectors.py + CONTEXT.md glossary.
+# ----------------------------------------------------------------------------
+@app.get("/api/sectors")
+async def list_sectors():
+    """The init-page toggle: 6 sectors with headline LTV:CAC + band + 5 cycle stages."""
+    from engine import cycle_compute  # typed seam over the sector governance adapter
+    sector_list = sectors.list_sectors()
+    for s in sector_list:
+        s["cycle_stages"] = cycle_compute.cycle_stages_for(s["sector"])
+    return {
+        "sectors": sector_list,
+        "default": sectors.default_sector(),
+        "attribution": sectors.ATTRIBUTION,
+        "hosting": sectors.HOSTING,
+    }
+
+
+@app.get("/api/sector/{sector_id}")
+async def get_sector(sector_id: str):
+    """One sector coerced to the canonical shape: flywheel (5 cycle stages),
+    LTV:CAC band, per-cohort + per-location drill, and the governance profile."""
+    data = sectors.coerce(sector_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Unknown sector: {sector_id}")
+    return data
 
 
 FORMULAS = {
@@ -367,6 +426,113 @@ async def opportunity(region: str = "REG-NORTH"):
     if region not in REGION_IDS:
         raise HTTPException(422, "unknown region")
     return engine.regional_opportunity_summary(region)
+
+
+class NarrativeRequest(BaseModel):
+    region: str = "REG-NORTH"
+    sector: str = "healthcare"
+    question: Optional[str] = Field(default=None, max_length=500)
+    role: str = Field(default="regional_head", max_length=60)
+    # Tri-state gate; default "off" (deterministic only, no budget drained).
+    use_model: Literal["off", "deterministic", "synthesized"] = "off"
+
+
+@app.post("/api/narrative")
+async def narrative(req: NarrativeRequest, session_id: str = Depends(get_session)):
+    """Typed AINarrative (deepening #3; ADR-0004).
+
+    Returns a typed narrative whose provenance lineage cites a REAL OpportunityGroup
+    id (#1) and REAL ClosureEvent ids (#2). use_model defaults to "off" — the public
+    demo is deterministic and never drains model budget; "synthesized" needs opt-in
+    AND the budget gate, and degrades to deterministic when the model is disabled.
+    """
+    if req.region not in REGION_IDS:
+        raise HTTPException(422, "unknown region")
+    if sectors.get_profile(req.sector) is None:
+        raise HTTPException(422, f"unknown sector '{req.sector}'")
+
+    mode = model_budget.use_model_mode(req.use_model)
+    await ensure_session_seed(session_id)
+
+    # Deterministic, grounded narrative (the engine owns the numbers + refs).
+    try:
+        narr = ai_evidence.build_narrative(
+            req.region, req.sector, req.question or "", req.role, closure_spine, _now_iso())
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+    # Reject orphan refs — the lineage must resolve to real #1 + #2 records.
+    bad = ai_evidence.validate_refs(narr, req.region, req.sector, closure_spine)
+    if bad:
+        raise HTTPException(409, bad)
+
+    # "synthesized" only actually runs the model when enabled; otherwise the prose
+    # stays deterministic. Either way the lineage/refs/confidence are engine-owned.
+    served_mode = "synthesized" if (mode == "synthesized" and model_budget.config()["enabled"]) \
+        else "deterministic"
+
+    return {
+        "narrative": narr.model_dump(),
+        "requested_mode": req.use_model,
+        "served_mode": served_mode,
+        "model_enabled": model_budget.config()["enabled"],
+        "generated_at": _now_iso(),
+    }
+
+
+@app.get("/api/operator_query/library")
+async def operator_query_library_view(sector: str = "healthcare"):
+    """The pre-canned 'Ask [Company]:' library for a sector (~30 questions)."""
+    if sectors.get_profile(sector) is None:
+        raise HTTPException(422, f"unknown sector '{sector}'")
+    qs = operator_query_library.questions_for_sector(sector)
+    return {"sector": sector, "count": len(qs), "questions": [q.model_dump() for q in qs]}
+
+
+class OperatorQueryRequest(BaseModel):
+    query_id: str = Field(max_length=80)   # pre-canned only in v1.0 — no free text
+    region: str = "REG-NORTH"
+
+
+@app.post("/api/operator_query")
+async def operator_query(req: OperatorQueryRequest, session_id: str = Depends(get_session)):
+    """Run a pre-canned operator query through the 3-adapter dispatch (#5).
+
+    Qdrant retrieval (closure events) -> engine computation (#4) -> AINarrative
+    wrap (#3). v1.0 accepts a pre-canned query_id only; the typed answer cites
+    real OpportunityGroup + ClosureEvent ids across the 3 knowledge layers.
+    """
+    if req.region not in REGION_IDS:
+        raise HTTPException(422, "unknown region")
+    q = operator_query_library.get_question(req.query_id)
+    if q is None:
+        raise HTTPException(404, f"Unknown pre-canned query '{req.query_id}'. Free-text is not supported in v1.0.")
+    await ensure_session_seed(session_id)
+    return query_dispatch.dispatch(q, req.region, closure_spine, _now_iso())
+
+
+@app.get("/api/ltv_cac")
+async def ltv_cac_view(sector: str = "healthcare", region: str = "REG-NORTH"):
+    """Typed flywheel metric (deepening #4; ADR-0002).
+
+    Returns the computed LtvCacComputation (company ratio + band + per-stage/
+    cohort/location/intervention decomposition), the Goldratt BindingConstraint,
+    and the Pareto Critical Few — proving the band is COMPUTED, not guessed.
+    """
+    if region not in REGION_IDS:
+        raise HTTPException(422, "unknown region")
+    if sectors.get_profile(sector) is None:
+        raise HTTPException(422, f"unknown sector '{sector}'")
+    comp = cycle_compute.regional_ltv_cac(region, sector)
+    bc = cycle_compute.regional_binding_constraint(region, sector)
+    cf = cycle_compute.regional_critical_few(region, sector)
+    return {
+        "sector": sector,
+        "region": region,
+        "ltv_cac": comp.model_dump(),
+        "binding_constraint": bc.model_dump() if bc else None,
+        "critical_few": cf.model_dump(),
+    }
 
 
 # ----------------------------------------------------------------------------
@@ -774,6 +940,79 @@ async def verify_closure(intervention_id: str, req: VerifyRequest, session_id: s
         update["proof_id"] = None
     await repo.save(session_id, intervention_id, update)
     return _clean(await _get_intervention(intervention_id, session_id))
+
+
+@app.post("/api/interventions/{intervention_id}/close")
+async def close_intervention(intervention_id: str, req: CloseRequest,
+                             session_id: str = Depends(get_session)):
+    """Typed closure (deepening #2; ADR-0003/0004).
+
+    Validates the closure transition via the typed state machine, resolves the
+    REQUIRED opportunity_group_ref to a real OpportunityGroup (no orphans),
+    applies the doctrine-Q4 sector/company precedence rule, and records an
+    immutable ClosureEvent on the append-only spine.
+    """
+    doc = await _get_intervention(intervention_id, session_id)
+
+    # 1. Typed transition: the substrate status must sit in the closure sub-path
+    #    and be allowed to advance to closure_claimed.
+    src = intervention_state.FROM_SUBSTRATE.get(doc["status"])
+    if src is None:
+        raise HTTPException(409, f"Status '{doc['status']}' is not in the closure sub-path.")
+    try:
+        intervention_state.validate_transition(src, intervention_state.ClosureState.CLOSURE_CLAIMED)
+    except intervention_state.InvalidTransition as e:
+        raise HTTPException(409, str(e))
+
+    # 2. Resolve the cited OpportunityGroup (no orphan closures).
+    if req.region not in REGION_IDS:
+        raise HTTPException(422, f"unknown region '{req.region}'")
+    groups = cycle_compute.region_groups(req.region, req.sector)
+    matched = next((g for g in groups if g.opportunity_group_id == req.opportunity_group_ref), None)
+    if matched is None:
+        raise HTTPException(422, f"opportunity_group_ref '{req.opportunity_group_ref}' "
+                                 f"does not resolve to an OpportunityGroup in {req.region}.")
+
+    # 3. Typed claim, naming the cycle stage and the named actor.
+    claim = intervention_state.ClosureClaim(
+        stage=matched.stage, named_actor=req.named_actor, evidence_ids=req.evidence_ids,
+        consecutive_days=req.consecutive_days, note=req.note,
+    )
+
+    # 4. Doctrine Q4: default precedence from the cited group's relationship;
+    #    sector wins on conflict unless a named actor overrides.
+    default = precedence_from_relationship(matched.opportunity_relationship)
+    res = resolve_precedence(req.sector_position, req.company_position, default,
+                             override_actor=req.override_actor, override_reason=req.override_reason)
+
+    # 5. Immutable ClosureEvent on the append-only spine.
+    event = ClosureEvent(
+        closure_id=f"CL-{intervention_id}-{_now_iso()}",
+        intervention_id=intervention_id,
+        opportunity_group_ref=req.opportunity_group_ref,
+        claim=claim.model_dump(),
+        proof=None,
+        precedence_source=res["precedence_source"],
+        overridden_by=res["overridden_by"],
+        override_reason=res["override_reason"],
+        timestamp=_now_iso(),
+        audit_trail=res["audit_trail"],
+    )
+    event_id = closure_spine.append(event)
+
+    # 6. Advance the substrate status (the spine, not the status flag, is the
+    #    source of truth — the status is a projection).
+    history = doc.get("history", [])
+    history.append({"at": _now_iso(), "event": "closure_event_recorded", "status": "Closure Claimed",
+                    "closure_event_id": event_id, "precedence_source": res["precedence_source"]})
+    await repo.save(session_id, intervention_id, {"status": "Closure Claimed", "history": history})
+
+    return {
+        "intervention": _clean(await _get_intervention(intervention_id, session_id)),
+        "closure_event": event.model_dump(),
+        "event_id": event_id,
+        "conflict": res["conflict"],
+    }
 
 
 # ----------------------------------------------------------------------------

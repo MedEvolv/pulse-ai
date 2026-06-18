@@ -1,0 +1,59 @@
+sector: automotive
+display_name: Automotive & Mobility
+depth: full
+reference: Metro dealership network (synthetic, CarDekho-shaped)
+
+labels:
+  location: Dealership
+  customer: Owner
+  operator: Dealership GM
+  region: Zone
+  cohort: Owner segment
+  intervention: Service-recall intervention
+
+headline:
+  ltv_cac: 4.0
+  band: [3.0, 4.0]
+  binding_constraint: spend
+
+stage_labels:
+  spend: Acquisition
+  revenue: Vehicle sale
+  retention: Service retention
+  expansion: Upgrade / trade-in
+  referral: Owner referral
+
+rulesets:
+  - "OEM warranty + service-disclosure rules; no recall bypass, no warranty-fraud indicators"
+  - "Franchise-agreement disclosure boundaries respected; no cross-dealer poaching in the narrative"
+  - "Service-record and VIN history pseudonymized before the intelligence layer"
+  - "Closure proof must carry a named service-manager sign-off"
+
+protocols:
+  data_sources:
+    - name: Dealer CRM
+      format: csv_export
+      cadence: weekly
+    - name: Service tickets
+      format: csv_export
+      cadence: weekly
+    - name: DMS (Dealer Management System)
+      format: csv_export
+      cadence: weekly
+    - name: OEM portal export
+      format: csv_export
+      cadence: weekly
+  forbidden_sources:
+    - "Live OEM portal (phase-two; v1 is batch only)"
+    - "Live financing / loan data (out of scope, permanently)"
+
+policies:
+  closure_proof: Service ticket at the due interval + owner follow-up, with named service-manager sign-off
+  escalation: service advisor -> service manager -> GM -> OEM regional
+  ai_disclosure: "AI-generated. Reviewed by [service manager] before action."
+
+cadences:
+  recall: 6-month service, 18-month upgrade, annual renewal, OEM safety recall
+  lapse_threshold_days: 270
+  reactivation: dealer-routed call (30d) + dealer-routed email (60d)
+  reactivation_owner: Dealership GM

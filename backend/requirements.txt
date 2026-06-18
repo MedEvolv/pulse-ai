@@ -3,6 +3,9 @@ uvicorn==0.34.0
 python-dotenv==1.0.1
 motor==3.6.0
 pydantic==2.10.4
+# Sector governance profiles (RevOpsOS v1.0) are declarative YAML loaded at runtime
+# by backend/sectors.py — the engine consumes governance as config, not code.
+PyYAML==6.0.2
 # Model-mode brief synthesis uses Vertex AI Gemini (ADR-0007; Emergent removed,
 # ADR-0006). Imported lazily — the deterministic path needs none of it. Model
 # mode is off by default; set LLM_API_KEY (Vertex express key) to enable.

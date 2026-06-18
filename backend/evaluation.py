@@ -11,6 +11,7 @@ import copy
 import briefing
 import engine
 from brief_validation import validate_brief_output
+from engine.opportunity_group import OpportunityGroup, shared_total
 
 EVAL_VERSION = "eval-2.0.0"
 
@@ -47,6 +48,99 @@ def _valid_brief(mid, eid, confidence="high"):
         }],
         "insufficient_evidence": False,
         "limitations": ["Synthetic data", "First-touch attribution"],
+    }
+
+
+def _og(stage, rel, value, appts=0, gid="OPP-FIXTURE"):
+    """Build a typed OpportunityGroup fixture (diagnostic carries no group id)."""
+    return OpportunityGroup(
+        opportunity_group_id=(None if rel == "diagnostic" else gid),
+        stage=stage,
+        current_rate=None,
+        benchmark_rate=None,
+        raw_additional=float(appts),
+        display_additional=appts,
+        value_inr=value,
+        metric_evidence_id=None,
+        caveats=[],
+        opportunity_relationship=rel,
+    )
+
+
+def run_opportunity_fixtures() -> dict:
+    """Adversarial non-overlapping-math fixtures for the typed OpportunityGroup seam.
+
+    Proves that ONLY `shared` groups contribute to a regional total — `allocation`
+    and `diagnostic` are filtered — plus zero-denominator, benchmark-equal, and
+    rounding edge cases. No model calls; pure typed-seam math.
+    """
+    results = []
+
+    def case(cid, desc, groups, exp_total, exp_shared_count):
+        t = shared_total(groups)
+        assertions = [
+            ("total_is_shared_only", t["shared_total_value_inr"] == exp_total),
+            ("shared_count_matches", t["shared_group_count"] == exp_shared_count),
+            ("filtered_count_matches",
+             t["filtered_group_count"] == len(groups) - exp_shared_count),
+        ]
+        results.append({
+            "case_id": cid, "description": desc, "dimension": "economic_truth",
+            "expected": {"shared_total_value_inr": exp_total, "shared_groups": exp_shared_count},
+            "actual": t,
+            "assertions": [{"name": n, "passed": bool(v)} for n, v in assertions],
+            "passed": all(v for _, v in assertions),
+        })
+
+    # North: 3 groups (2 shared + 1 diagnostic) — total = sum of the 2 shared.
+    case("OPP-NORTH-2SHARED-1DIAG", "North: diagnostic excluded from total",
+         [_og("spend", "shared", 100000, 6), _og("revenue", "shared", 50000, 3),
+          _og("retention", "diagnostic", 0, 0)], 150000, 2)
+
+    # South: 2 groups (both shared) — total = sum of both.
+    case("OPP-SOUTH-2SHARED", "South: both shared sum",
+         [_og("spend", "shared", 80000, 5), _og("revenue", "shared", 40000, 2)], 120000, 2)
+
+    # West: 1 group (allocation) — total = 0 (allocations are non-additive).
+    case("OPP-WEST-1ALLOC", "West: allocation never contributes to total",
+         [_og("retention", "allocation", 90000, 5)], 0, 0)
+
+    # Zero-denominator: a shared pool with no recoverable value contributes 0 but counts.
+    case("OPP-ZERO-DENOM", "Zero-value shared pool contributes 0",
+         [_og("spend", "shared", 0, 0), _og("revenue", "shared", 25000, 1)], 25000, 2)
+
+    # Benchmark-equal: current == benchmark -> raw 0 -> value 0 shared group.
+    case("OPP-BENCHMARK-EQUAL", "At-benchmark stage yields no pool",
+         [_og("spend", "shared", 0, 0)], 0, 1)
+
+    # Rounding: exact integer summation, no float drift.
+    case("OPP-ROUNDING", "Shared totals sum exactly",
+         [_og("spend", "shared", 12345, 1), _og("revenue", "shared", 67891, 2)], 80236, 2)
+
+    # Enum/shape enforcement: a diagnostic must not carry a group id.
+    diag = _og("retention", "diagnostic", 0, 0)
+    results.append({
+        "case_id": "OPP-DIAGNOSTIC-NO-POOL", "description": "Diagnostic carries no pool id",
+        "dimension": "economic_truth",
+        "expected": {"opportunity_group_id": None, "value_inr": 0},
+        "actual": {"opportunity_group_id": diag.opportunity_group_id, "value_inr": diag.value_inr},
+        "assertions": [
+            {"name": "no_group_id", "passed": diag.opportunity_group_id is None},
+            {"name": "zero_value", "passed": diag.value_inr == 0},
+            {"name": "not_additive", "passed": diag.is_additive is False},
+        ],
+        "passed": diag.opportunity_group_id is None and not diag.is_additive,
+    })
+
+    passed = sum(1 for r in results if r["passed"])
+    return {
+        "name": "OpportunityGroup Economic-Truth Fixtures",
+        "eval_version": EVAL_VERSION,
+        "scenario_count": len(results),
+        "passed": passed,
+        "failed": len(results) - passed,
+        "failed_case_ids": [r["case_id"] for r in results if not r["passed"]],
+        "results": results,
     }
 
 

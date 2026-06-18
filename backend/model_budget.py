@@ -14,9 +14,31 @@ def _flag(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+# Tri-state model gate (deepening #3). Public demo default is "off" — deterministic
+# only, no budget drained. "synthesized" needs explicit opt-in AND the budget gate.
+USE_MODEL_MODES = ("off", "deterministic", "synthesized")
+
+
+def use_model_mode(requested: str | None = None) -> str:
+    """Resolve the effective model mode. Default "off".
+
+    A caller may request a mode; "synthesized" is honored only when the model is
+    enabled (MODEL_ENABLED=true). Otherwise it degrades to "deterministic" so the
+    public demo can never drain budget. Unknown requests -> "off".
+    """
+    env_default = _flag("MODEL_USE_MODE", "off").lower()
+    mode = (requested or env_default or "off").lower()
+    if mode not in USE_MODEL_MODES:
+        return "off"
+    if mode == "synthesized" and _flag("MODEL_ENABLED", "false").lower() != "true":
+        return "deterministic"   # opt-in present but model disabled -> deterministic, no spend
+    return mode
+
+
 def config() -> dict:
     return {
         "enabled": _flag("MODEL_ENABLED", "false").lower() == "true",
+        "use_model_default": _flag("MODEL_USE_MODE", "off").lower(),
         "daily_limit": int(_flag("MODEL_DAILY_RUN_LIMIT", "25")),
         "min_seconds_between_runs": int(_flag("MODEL_MIN_SECONDS_BETWEEN_RUNS", "20")),
         "timeout_seconds": int(_flag("MODEL_TIMEOUT_SECONDS", "12")),

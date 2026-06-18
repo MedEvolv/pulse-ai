@@ -54,7 +54,7 @@ def test_high_cost_is_diagnostic_with_no_pool():
 
 def test_clinic_allocation_never_exceeds_regional_show_pool():
     region = "REG-NORTH"
-    show = engine.opportunity_group(region, "show")
+    show = engine.opportunity_group_for(region, "show")
     alloc = engine.clinic_show_allocation(region)
     assert sum(a["display_additional_attended"] for a in alloc.values()) <= show["display_additional_attended"]
 
