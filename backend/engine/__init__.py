@@ -604,7 +604,13 @@ def benchmark_rates() -> dict:
 
 @lru_cache(maxsize=8)
 def region_opportunity_groups(region: str, avg_value: float = DEFAULT_AVG_REALIZED_VALUE) -> list:
-    """Non-overlapping stage opportunity groups for a region (the only additive pools)."""
+    """Non-overlapping stage opportunity groups for a region (the only additive pools).
+
+    DEPRECATED shape: returns funnel-stage dicts (contact/booking/show) for
+    backward compatibility with the cockpit + existing tests. The typed,
+    cycle-stage canonical seam is `engine.cycle_compute.region_groups()`, which
+    wraps these same pools as validated `OpportunityGroup` models (ADR-0002).
+    """
     m = compute_metrics("current", region)
     L = m["leads"]
     C, B, S = clamp01(m["contact_rate"]), clamp01(m["booking_rate"]), clamp01(m["show_rate"])
@@ -646,7 +652,7 @@ def region_opportunity_groups(region: str, avg_value: float = DEFAULT_AVG_REALIZ
     return groups
 
 
-def opportunity_group(region, stage):
+def opportunity_group_for(region, stage):
     for g in region_opportunity_groups(region):
         if g["stage"] == stage:
             return g
@@ -659,7 +665,7 @@ def clinic_show_allocation(region: str, avg_value: float = DEFAULT_AVG_REALIZED_
 
     Guarantees sum of clinic allocations never exceeds the regional show opportunity.
     """
-    show_group = opportunity_group(region, "show")
+    show_group = opportunity_group_for(region, "show")
     if not show_group:
         return {}
     regional_appts = show_group["display_additional_attended"]
@@ -702,7 +708,7 @@ def regional_opportunity_summary(region: str) -> dict:
     total_appts = sum(g["display_additional_attended"] for g in groups)
     total_value = sum(g["value_inr"] for g in groups)
     leaks = leakages_for(region)
-    return {
+    summary = {
         "region_id": region,
         "period": PERIOD,
         "unique_opportunity_pools": len(groups),
@@ -713,6 +719,15 @@ def regional_opportunity_summary(region: str) -> dict:
         "note": ("Scenario opportunity based on explicit benchmark assumptions. "
                  "Not a forecast or causal revenue estimate. Not additive across related alerts."),
     }
+    # Typed cycle seam (ADR-0002): the same pools as validated OpportunityGroups,
+    # relationship-filtered (only `shared` contributes to the total). Lazy import
+    # keeps the engine package free of an import cycle. Additive, non-breaking.
+    try:
+        from engine import cycle_compute
+        summary["cycle"] = cycle_compute.regional_total(region)
+    except Exception:  # pragma: no cover - typed seam is best-effort, dict path is canonical for back-compat
+        pass
+    return summary
 
 
 def _cohort_evidence_ids(region, clinic=None, predicate=None, limit=4):
@@ -819,7 +834,7 @@ def build_leakages() -> list:
 
     def shared_fields(region, stage, owner_role, confidence):
         """Attach the shared regional opportunity group + metric evidence (CP-01.4)."""
-        g = opportunity_group(region, stage)
+        g = opportunity_group_for(region, stage)
         mev = mev_id_for(stage, region)
         return {
             "metric_id": metric_id_for(stage, region),

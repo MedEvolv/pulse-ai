@@ -275,9 +275,13 @@ async def meta():
 # ----------------------------------------------------------------------------
 @app.get("/api/sectors")
 async def list_sectors():
-    """The init-page toggle: 6 sectors with headline LTV:CAC + band."""
+    """The init-page toggle: 6 sectors with headline LTV:CAC + band + 5 cycle stages."""
+    from engine import cycle_compute  # typed seam over the sector governance adapter
+    sector_list = sectors.list_sectors()
+    for s in sector_list:
+        s["cycle_stages"] = cycle_compute.cycle_stages_for(s["sector"])
     return {
-        "sectors": sectors.list_sectors(),
+        "sectors": sector_list,
         "default": sectors.default_sector(),
         "attribution": sectors.ATTRIBUTION,
         "hosting": sectors.HOSTING,
