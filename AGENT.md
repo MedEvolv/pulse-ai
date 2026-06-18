@@ -1880,3 +1880,129 @@ numbers. It is an accountability engine that allows a leader to move from a
 number to its evidence, from evidence to an owner, and from an owner to proof.
 
 That is the heart of Pulse AI. Preserve it.
+<!-- PULSE AI V1.0 DOCTRINE ADDENDUM -->
+<!-- This is appended to the existing AGENT.md in C:\ArchLife-Systems\pulse-ai\ -->
+<!-- Date: 2026-06-17 -->
+<!-- Source: grill-with-docs session + Vikram 12:26 PM call + Perplexity deep research -->
+
+---
+
+# v1.0 Doctrine Addendum (2026-06-17)
+
+The Pulse-00 AGENT.md (above) describes the v0.x framing: healthcare-first, funnel doctrine, leakages taxonomy, ReputationOS Mirror. The v1.0 doctrine (locked 2026-06-17) reframes Pulse AI on the Pulse-00 substrate. **Both coexist. Pulse-00 is the substrate. v1.0 is the framing.**
+
+## What's locked in v1.0
+
+### Brand architecture
+
+- **Pulse AI** = product family (umbrella brand)
+- **RevOpsOS** = universal engine's public surface name
+- **ReputationOS** = healthcare vertical module (one of six sectors)
+- The product family is industry-agnostic on the public surface
+- Healthcare is the demo vertical for the private Amar pitch only
+
+### Cycle doctrine
+
+- **Flywheel over funnel** (replaces the funnel doctrine in Pulse-00)
+- 5 universal cycle stages (Stage 1-5), sector-specific names per governance profile
+- LTV:CAC is the headline number, with bands: 2:1 baseline, 3:1 target, 4:1 stretch
+- Full LTV:CAC cohort: company + per-stage + per-cohort + per-location + per-intervention
+- Critical Few (Pareto) cohorts surfaced in the AI narrative
+- Binding constraint computed via Goldratt's theory of constraints
+
+### Sector governance (6 sectors in v1)
+
+- Healthcare (deep, with the Kamla Nagar crosswalk + hospital simulator)
+- Retail (full, with UCI Online Retail II data)
+- SaaS mid-market (full, with IBM Telco proxy)
+- Hospitality (stub, with Hotel Booking Demand data)
+- Automotive & Mobility (stub, with CarDekho + Indian telecom hybrid)
+- Financial Services (stub, with Lending Club data)
+
+The governance profile (rulesets, protocols, policies, cadences) is YAML config, not code. To add a 7th sector, write one YAML file. The engine consumes the governance profile as config.
+
+### RAG + PKM (the institutional moat)
+
+- Three knowledge layers: sector (shared, 6 profiles), company (per-deployment PKM), customer (per-person, anonymous)
+- Append-only event spine is the source of truth (HIPAA, KYC, GDPR audit-friendly)
+- Snapshot projections served fast for operator queries
+- Provenance lineage visible by default: operator query â†’ engine computation â†’ knowledge layer â†’ source document, with timestamps
+- Pre-canned question library: ~30 questions per sector (3-5 per cycle stage). No free-text in v1.
+- Named-owner handoff in every retrieved result
+- Cite-able evidence format: "Reference: <doc-name>, last reviewed <date> + closure proof from <date> + named owner <person>."
+
+### Friday 2026-06-20 demo (the load-bearing moment)
+
+- 8 steps, 30-45 min
+- Live sector switching as the load-bearing moment
+- 3 full sectors (Healthcare, Retail, SaaS) + 3 stub sectors
+- Mentions: pulse-ai.archlife.in, "A product of ArchLife"
+
+## What this means for the existing Pulse-00 codebase
+
+- **Pulse-00 engine** (in `backend/engine.py`) becomes the **deterministic compute layer** of RevOpsOS. The funnel stage logic is replaced by 5 universal cycle stages, sector-shaped via the governance profile.
+- **Hospital simulator + Kamla Nagar crosswalk** (in `backend/` and `docs/unified-database/`) becomes the **healthcare deep demo** in the sector toggle.
+- **Unified DB schema** (in `docs/unified-database/schema.sql`) becomes the **canonical data shape** that the 6 sector profiles coerce to.
+- **Closure proof + named-owner handoff** (in `backend/engine.py`) is preserved as the **institutional memory unit** â€” the thing the company PKM cites.
+- **AI briefing + deterministic fallback** (in `backend/briefing.py`) becomes the **AI evidence layer** of RevOpsOS, citing the 3 knowledge layers.
+- **Accountability state machine** (Proof Required â†’ Closure Claimed â†’ Closed) is preserved as the **intervention fabric**.
+
+The substrate is preserved. The framing is updated. The engine is sector-independent. The governance is sector-shaped. The PKM is per-company. The cycle is a flywheel. The headline is LTV:CAC.
+
+## What's new in the repo (the v1.0 layers)
+
+- `app/init/sector-toggle.tsx` â€” the demo init page with 6-sector toggle
+- `app/lib/coerce_sector.ts` â€” the dataset coercion engine
+- `app/lib/sector-profiles/*.yaml` (6 files) â€” the sector governance profiles
+- `app/lib/unified-schema.ts` â€” the canonical data shape
+- `app/lib/labels/*.yaml` (6 files) â€” sector-shaped labels
+- `app/lib/engine/cycle_compute.ts` â€” refactored to consume governance as config
+- `app/lib/engine/identity_resolution.ts` â€” sector-independent identity
+- `app/lib/engine/ai_evidence.ts` â€” AI evidence citing 3 knowledge layers
+- `app/lib/engine/intervention_fabric.ts` â€” sector-shaped intervention state machine
+- `app/lib/engine/binding_constraint.ts` â€” Goldratt applied to 5 stages
+- `app/lib/engine/lifecycle.ts` â€” 5 stages as state machine
+- `app/lib/engine/labels.ts` â€” sector-shaped label resolver
+- `app/lib/engine/lty_cac.ts` â€” LTV:CAC with 4 bands
+- `app/lib/engine/critical_few.ts` â€” Pareto per cohort
+- `app/lib/engine/provenance_lineage.ts` â€” provenance with timestamps
+- `app/lib/rag/qdrant_client.ts` â€” vector store
+- `app/lib/rag/bm25_index.ts` â€” lexical index
+- `app/lib/rag/cross_encoder.ts` â€” reranker
+- `app/lib/rag/hybrid_retrieve.ts` â€” vector + lexical + rerank
+- `app/lib/rag/ingest.ts` â€” ingestion pipeline
+- `app/lib/rag/retrieve.ts` â€” retrieval API
+- `app/lib/rag/provenance.ts` â€” provenance lineage
+- `app/api/ask/route.ts` â€” pre-canned question library API
+- `app/components/AskCompany.tsx` â€” operator query UI
+- `app/components/SectorGovernancePanel.tsx` â€” governance panel UI
+- `app/components/SectorToggle.tsx` â€” sector toggle component
+- `data/pkm/<company>/` (6 company folders, 11 entity types each)
+- `data/pkm/sector-protocols/<sector>/` (6 sector folders, ~20-50 docs each)
+- `data/kaggle/<sector>/` (5 datasets + schema docs)
+- `docs/adr/0001-0006/` (the 6 ADRs)
+
+## Sister documents (in the vault)
+
+- `problem-validation-brief--vikram-2026-06-17-v2.1.md` â€” the brief for Vikram
+- `brief--siddharth--v2-2026-06-17.md` â€” the v2 brief for Siddharth
+- `prep--siddharth-sharp-questions-2026-06-17.md` â€” 12 sharp questions
+- `decision--codex-to-opus-4-8-pivot.md` â€” the Codex â†’ Opus 4.8 pivot
+- `delegation-manifest--friday-build-2026-06-17.md` â€” the master plan
+- `_GOAL_PROMPTS--opus-4-8.md` â€” the 6 goal prompts ready to fire
+- `synthesis--flywheel-category-read-2026-06-17.md` â€” the Perplexity synthesis
+- `synthesis--sector-research-inventory-2026-06-17.md` â€” the 6 sector research inventory
+- `intelligence--kaufman-personal-mba-deep-dive-2026-06-17.md` â€” the Kaufman mental models
+- `grill-summary--2026-06-17.md` â€” the 14 decisions + 6 ADRs + 22 glossary terms
+
+## Hosting & ownership
+
+- **Hosting:** pulse-ai.archlife.in (umbrella subdomain)
+- **Owner:** ArchLife
+- **Attribution:** "A product of ArchLife" in every screen
+- **Vikram sir's role:** customer (Clove Dental pilot), mentor (Amar pitch Friday 2026-06-20), public-facing advocate. NOT the owner.
+- The existing pulse-ai-sepia.vercel.app must migrate to pulse-ai.archlife.in before Friday 2026-06-20.
+
+---
+
+**A product of ArchLife. Hosted at pulse-ai.archlife.in.**
