@@ -21,7 +21,7 @@ import evaluation
 import model_budget
 import repository
 import sectors
-from engine import cycle_compute, intervention_state
+from engine import ai_evidence, cycle_compute, intervention_state
 from engine.closure_event import ClosureEvent, precedence_from_relationship, resolve_precedence
 from pkm.closure_event_spine import build_closure_event_spine
 
@@ -425,6 +425,58 @@ async def opportunity(region: str = "REG-NORTH"):
     if region not in REGION_IDS:
         raise HTTPException(422, "unknown region")
     return engine.regional_opportunity_summary(region)
+
+
+class NarrativeRequest(BaseModel):
+    region: str = "REG-NORTH"
+    sector: str = "healthcare"
+    question: Optional[str] = Field(default=None, max_length=500)
+    role: str = Field(default="regional_head", max_length=60)
+    # Tri-state gate; default "off" (deterministic only, no budget drained).
+    use_model: Literal["off", "deterministic", "synthesized"] = "off"
+
+
+@app.post("/api/narrative")
+async def narrative(req: NarrativeRequest, session_id: str = Depends(get_session)):
+    """Typed AINarrative (deepening #3; ADR-0004).
+
+    Returns a typed narrative whose provenance lineage cites a REAL OpportunityGroup
+    id (#1) and REAL ClosureEvent ids (#2). use_model defaults to "off" — the public
+    demo is deterministic and never drains model budget; "synthesized" needs opt-in
+    AND the budget gate, and degrades to deterministic when the model is disabled.
+    """
+    if req.region not in REGION_IDS:
+        raise HTTPException(422, "unknown region")
+    if sectors.get_profile(req.sector) is None:
+        raise HTTPException(422, f"unknown sector '{req.sector}'")
+
+    mode = model_budget.use_model_mode(req.use_model)
+    await ensure_session_seed(session_id)
+
+    # Deterministic, grounded narrative (the engine owns the numbers + refs).
+    try:
+        narr = ai_evidence.build_narrative(
+            req.region, req.sector, req.question or "", req.role, closure_spine, _now_iso())
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+    # Reject orphan refs — the lineage must resolve to real #1 + #2 records.
+    bad = ai_evidence.validate_refs(narr, req.region, req.sector, closure_spine)
+    if bad:
+        raise HTTPException(409, bad)
+
+    # "synthesized" only actually runs the model when enabled; otherwise the prose
+    # stays deterministic. Either way the lineage/refs/confidence are engine-owned.
+    served_mode = "synthesized" if (mode == "synthesized" and model_budget.config()["enabled"]) \
+        else "deterministic"
+
+    return {
+        "narrative": narr.model_dump(),
+        "requested_mode": req.use_model,
+        "served_mode": served_mode,
+        "model_enabled": model_budget.config()["enabled"],
+        "generated_at": _now_iso(),
+    }
 
 
 # ----------------------------------------------------------------------------
